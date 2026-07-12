@@ -99,7 +99,7 @@ impl ApplicationHandler for App {
                 let down = event.state == ElementState::Pressed;
 
                 match event.physical_key {
-                    // Physical keys = layout does not matter. finally, keyboard behaves
+                    // Physical keys = layout does not matter
                     PhysicalKey::Code(KeyCode::KeyA | KeyCode::ArrowLeft) => {
                         self.input.set_key(GameKey::Left, down);
                     }

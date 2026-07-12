@@ -57,7 +57,6 @@ impl Portal {
     }
 
     // now, the msot important part of this thign
-
     pub fn tp_obj(&self, p2: &Portal, player: &mut Player) {
         let scale = if self.scale_objects && p2.scale_objects {
             p2.scale / self.scale

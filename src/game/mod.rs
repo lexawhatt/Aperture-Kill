@@ -31,7 +31,6 @@ impl World {
             .update(dt, input.move_x, input.aim_pos, screen_width, screen_height);
 
         let [portal_a, portal_b] = self.portals;
-        // try one portal, then the other. no need to teleport twice in one frame
         if !portal_a.check_coll(&portal_b, &mut self.player) {
             portal_b.check_coll(&portal_a, &mut self.player);
         }
