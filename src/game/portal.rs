@@ -85,11 +85,13 @@ impl Portal {
         let source_tangent = self.tangent();
         let destination_tangent = destination.aligned_tangent(self);
 
+        // Preserve where the player crossed along the source portal line.
         let source_offset = player.pos - self.pos;
         let tangent_offset = source_offset.dot(source_tangent) * scale;
         let exit_distance =
             projected_extent(player.half_size() * scale, destination.normal) + EXIT_PADDING;
 
+        // Push outside the destination so the next frame does not instantly re-hit.
         player.size *= scale;
         player.pos = destination.pos
             + destination_tangent * tangent_offset
@@ -135,6 +137,7 @@ fn transform_velocity(
     destination_tangent: Vec2,
     scale: f32,
 ) -> Vec2 {
+    // Convert velocity into portal-local axes, then rebuild it at the exit.
     let tangent_speed = velocity.dot(source.tangent());
     let normal_speed = velocity.dot(source.normal);
 

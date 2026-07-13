@@ -20,6 +20,7 @@ impl Renderer {
 
         canvas.clear(Color::rgb(9, 10, 14));
 
+        // Draw world geometry first so actors and portals remain readable.
         for solid in &world.level.solids {
             let fill = if solid.portalable {
                 Color::rgb(36, 42, 53)
@@ -144,6 +145,7 @@ impl Canvas<'_> {
         let size = Vec2::new(42.0, 8.0);
         let gap = 7.0;
 
+        // Fractional fill makes recharge timing visible without text.
         for index in 0..MAX_DASH_CHARGES as usize {
             let pos = start + Vec2::new(index as f32 * (size.x + gap), 0.0);
             let filled = (charges - index as f32).clamp(0.0, 1.0);

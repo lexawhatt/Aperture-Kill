@@ -4,7 +4,7 @@ use crate::constants::{
     AIR_ACCEL, AIR_DRAG, DASH_CHARGE_RECOVERY, DASH_DURATION, DASH_SPEED, GRAVITY, GROUND_ACCEL,
     GROUND_FRICTION, JUMP_BUFFER_TIME, JUMP_COYOTE_TIME, JUMP_VELOCITY, MAX_DASH_CHARGES,
     MAX_WALL_JUMPS, PLAYER_SIZE, PLAYER_SPEED, SLIDE_BOOST, SLIDE_FRICTION, SLIDE_HEIGHT_SCALE,
-    WALL_GRAVITY_RAMP_TIME, WALL_JUMP_X, WALL_JUMP_Y, WALL_MIN_GRAVITY_SCALE, WALL_STICK_TIME,
+    WALL_JUMP_X, WALL_JUMP_Y, WALL_SLIDE_SPEED, WALL_STICK_TIME,
 };
 use crate::platform::input::Input;
 
@@ -26,7 +26,6 @@ pub struct Player {
     jump_buffer: f32,
     slide_dir: f32,
     wall_dir: f32,
-    wall_gravity_timer: f32,
     wall_jumps_left: u8,
     wall_timer: f32,
 }
@@ -53,7 +52,6 @@ impl Player {
             jump_buffer: 0.0,
             slide_dir: 1.0,
             wall_dir: 0.0,
-            wall_gravity_timer: 0.0,
             wall_jumps_left: MAX_WALL_JUMPS,
             wall_timer: 0.0,
         }
@@ -103,9 +101,6 @@ impl Player {
     }
 
     pub fn set_wall_contact(&mut self, wall_dir: f32) {
-        if self.wall_timer == 0.0 {
-            self.wall_gravity_timer = WALL_GRAVITY_RAMP_TIME;
-        }
         self.wall_dir = wall_dir;
         self.wall_timer = WALL_STICK_TIME;
     }
@@ -122,7 +117,6 @@ impl Player {
         self.jump_buffer = (self.jump_buffer - dt).max(0.0);
         self.coyote_timer = (self.coyote_timer - dt).max(0.0);
         self.dash_timer = (self.dash_timer - dt).max(0.0);
-        self.wall_gravity_timer = (self.wall_gravity_timer - dt).max(0.0);
         self.wall_timer = (self.wall_timer - dt).max(0.0);
         self.dashing = self.dash_timer > 0.0;
     }
@@ -164,6 +158,7 @@ impl Player {
         self.recover_dash(dt);
 
         if self.sliding {
+            // Slide ignores movement input after start, but gravity still applies.
             self.vel.x = approach(self.vel.x, self.slide_dir * SLIDE_BOOST, GROUND_ACCEL * dt);
             self.vel.x = approach(self.vel.x, 0.0, SLIDE_FRICTION * dt);
             self.vel.y += GRAVITY * dt;
@@ -183,7 +178,7 @@ impl Player {
             self.vel.x *= 1.0 - AIR_DRAG * dt;
         }
 
-        self.vel.y += GRAVITY * self.wall_gravity_scale() * dt;
+        self.vel.y += GRAVITY * dt;
         self.apply_wall_slide(input);
     }
 
@@ -194,10 +189,10 @@ impl Player {
         }
 
         if self.wall_timer > 0.0 && !self.on_ground && self.wall_jumps_left > 0 {
+            // Wall jumps spend limited air charges until the next landing.
             self.vel.x = -self.wall_dir * WALL_JUMP_X;
             self.vel.y = -WALL_JUMP_Y;
             self.wall_jumps_left -= 1;
-            self.wall_gravity_timer = 0.0;
             self.wall_timer = 0.0;
         } else if self.coyote_timer > 0.0 {
             self.vel.y = -JUMP_VELOCITY;
@@ -216,6 +211,9 @@ impl Player {
     fn apply_wall_slide(&mut self, input: &Input) {
         self.wall_sliding =
             !self.on_ground && self.wall_timer > 0.0 && input.move_x == self.wall_dir;
+        if self.wall_sliding && self.vel.y > WALL_SLIDE_SPEED {
+            self.vel.y = WALL_SLIDE_SPEED;
+        }
     }
 
     fn input_direction(&self, input: &Input) -> Vec2 {
@@ -250,6 +248,7 @@ impl Player {
 
     fn enter_slide(&mut self) {
         let bottom = self.pos.y + self.half_size().y;
+        // Preserve feet position so crouching does not lift or drop the player.
         self.size.y = PLAYER_SIZE.1 * SLIDE_HEIGHT_SCALE;
         self.pos.y = bottom - self.half_size().y;
         self.sliding = true;
@@ -257,6 +256,7 @@ impl Player {
 
     fn exit_slide(&mut self) {
         let bottom = self.pos.y + self.half_size().y;
+        // Restore standing size from the same floor contact point.
         self.size.y = PLAYER_SIZE.1;
         self.pos.y = bottom - self.half_size().y;
         self.sliding = false;
@@ -269,16 +269,6 @@ impl Player {
 
         // Dash charges refill over time unless the player is sliding.
         self.dash_charges = (self.dash_charges + DASH_CHARGE_RECOVERY * dt).min(MAX_DASH_CHARGES);
-    }
-
-    fn wall_gravity_scale(&self) -> f32 {
-        if self.wall_gravity_timer == 0.0 {
-            return 1.0;
-        }
-
-        // Wall contact starts floaty and ramps back to full gravity.
-        let progress = 1.0 - (self.wall_gravity_timer / WALL_GRAVITY_RAMP_TIME).clamp(0.0, 1.0);
-        WALL_MIN_GRAVITY_SCALE + (1.0 - WALL_MIN_GRAVITY_SCALE) * progress
     }
 }
 

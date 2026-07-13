@@ -33,8 +33,27 @@ pub struct Level {
 pub struct RayHit {
     pub point: Vec2,
     pub normal: Vec2,
+    pub surface_axis: usize,
+    pub surface_max: f32,
+    pub surface_min: f32,
     // Span of the hit surface along the portal line.
     pub surface_span: f32,
+}
+
+impl RayHit {
+    pub fn portal_center(self, portal_width: f32) -> Option<Vec2> {
+        if self.surface_span < portal_width {
+            return None;
+        }
+
+        let mut center = self.point;
+        let half_width = portal_width / 2.0;
+        // Clamp along the surface, not away from it, like Portal placement.
+        center[self.surface_axis] = center[self.surface_axis]
+            .clamp(self.surface_min + half_width, self.surface_max - half_width);
+
+        Some(center)
+    }
 }
 
 impl Level {
@@ -59,6 +78,7 @@ impl Level {
 
         for solid in &self.solids {
             if let Some(overlap) = aabb_overlap(player.pos, player.half_size(), *solid) {
+                // Resolve the smallest overlap axis to avoid diagonal popping.
                 if overlap.x < overlap.y {
                     let dir = (player.pos.x - solid.center().x).signum();
                     player.pos.x += overlap.x * dir;
@@ -85,6 +105,7 @@ impl Level {
             return None;
         }
 
+        // Keep nearest hit only; later walls are hidden behind it.
         let max_distance = dir.length();
         let ray_dir = dir / max_distance;
         self.solids
@@ -119,6 +140,7 @@ fn raycast_solid(
     let mut t_min = 0.0;
     let mut t_max = max_distance;
     let mut normal = Vec2::ZERO;
+    let mut hit_axis = 0;
 
     for axis in 0..2 {
         let origin_axis = origin[axis];
@@ -127,6 +149,7 @@ fn raycast_solid(
         let max_axis = max[axis];
 
         if dir_axis.abs() < RAY_EPSILON {
+            // Parallel rays only hit if they start inside this slab.
             if origin_axis < min_axis || origin_axis > max_axis {
                 return None;
             }
@@ -142,8 +165,10 @@ fn raycast_solid(
         axis_normal[axis] = if t1 < t2 { -1.0 } else { 1.0 };
 
         if near > t_min {
+            // The latest near plane is the surface the ray actually enters.
             t_min = near;
             normal = axis_normal;
+            hit_axis = axis;
         }
         t_max = t_max.min(far);
 
@@ -156,16 +181,18 @@ fn raycast_solid(
         return None;
     }
 
+    let surface_axis = if hit_axis == 0 { 1 } else { 0 };
+
+    // Store surface bounds so portal placement can slide away from edges.
     Some((
         t_min,
         RayHit {
             point: origin + dir * t_min,
             normal,
-            surface_span: if normal.x != 0.0 {
-                solid.size.y
-            } else {
-                solid.size.x
-            },
+            surface_axis,
+            surface_min: min[surface_axis],
+            surface_max: max[surface_axis],
+            surface_span: max[surface_axis] - min[surface_axis],
         },
     ))
 }

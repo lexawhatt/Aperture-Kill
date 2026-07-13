@@ -5,7 +5,7 @@ pub mod portal;
 #[cfg(test)]
 mod tests;
 
-use crate::constants::{PORTAL_WIDTH, TELEPORT_COOLDOWN};
+use crate::constants::{PORTAL_MIN_DISTANCE, PORTAL_WIDTH, TELEPORT_COOLDOWN};
 use crate::game::level::Level;
 use crate::game::player::Player;
 use crate::game::portal::{Color, Portal};
@@ -31,6 +31,7 @@ impl World {
     pub fn update(&mut self, dt: f32, input: &Input, screen_width: f32, screen_height: f32) {
         self.teleport_cooldown = (self.teleport_cooldown - dt).max(0.0);
 
+        // Movement owns velocity; level collision corrects the final position.
         self.player.update(dt, input, screen_width, screen_height);
         self.level.resolve_player(&mut self.player);
         self.shoot_portals(input);
@@ -58,22 +59,38 @@ impl World {
             return;
         }
 
+        // The portal gun shoots past the cursor until the first valid wall.
         let target = origin + aim.normalize() * 2_000.0;
         let Some(hit) = self.level.raycast_portalable(origin, target) else {
             return;
         };
-        // Tiny surfaces cannot hold the whole portal line.
-        if hit.surface_span < PORTAL_WIDTH {
+        // Near edges, the hit point is shifted along the wall so the portal fits.
+        let Some(center) = hit.portal_center(PORTAL_WIDTH) else {
+            return;
+        };
+        // Prevent overlapping portal pairs; they become unreadable and unstable.
+        if self.portal_too_close(index, center) {
             return;
         }
 
         self.portals[index] = Some(Portal::new(
-            hit.point.x,
-            hit.point.y,
+            center.x,
+            center.y,
             hit.normal,
             PORTAL_WIDTH,
             color,
         ));
+    }
+
+    fn portal_too_close(&self, index: usize, center: glam::Vec2) -> bool {
+        self.portals
+            .iter()
+            .enumerate()
+            .any(|(other_index, portal)| {
+                other_index != index
+                    && portal
+                        .is_some_and(|portal| portal.pos.distance(center) < PORTAL_MIN_DISTANCE)
+            })
     }
 
     fn try_teleport(&mut self) -> bool {
@@ -81,6 +98,7 @@ impl World {
         let current = self.player.pos;
         let half_size = self.player.half_size();
 
+        // A pair is required; a single portal is only a visual marker.
         let [Some(source), Some(destination)] = self.portals else {
             return false;
         };

@@ -4,7 +4,9 @@ use super::World;
 use super::level::{Level, Solid};
 use super::player::Player;
 use super::portal::{Color, Portal};
-use crate::constants::{DASH_SPEED, MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED};
+use crate::constants::{
+    DASH_SPEED, MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED, PORTAL_WIDTH, WALL_SLIDE_SPEED,
+};
 use crate::platform::input::{GameKey, Input};
 
 fn test_portal() -> Portal {
@@ -137,6 +139,22 @@ fn wall_jump_pushes_player_away_from_wall() {
 }
 
 #[test]
+fn wall_slide_caps_fall_speed() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.vel.y = WALL_SLIDE_SPEED * 2.0;
+    player.set_wall_contact(1.0);
+    input.set_key(GameKey::Right, true);
+    input.update();
+
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.wall_sliding);
+    assert_eq!(player.vel.y, WALL_SLIDE_SPEED);
+}
+
+#[test]
 fn fourth_wall_jump_requires_landing() {
     let mut player = Player::new(100.0, 100.0);
     let mut input = Input::new();
@@ -223,4 +241,37 @@ fn portal_does_not_place_on_too_small_surface() {
     world.update(1.0 / 60.0, &input, 900.0, 600.0);
 
     assert!(world.portals[0].is_none());
+}
+
+#[test]
+fn portal_shot_near_surface_edge_slides_inward() {
+    let level = Level {
+        solids: vec![Solid::new(100.0, 0.0, 200.0, 20.0, true)],
+    };
+
+    let hit = level
+        .raycast_portalable(Vec2::new(105.0, 100.0), Vec2::new(105.0, 0.0))
+        .unwrap();
+    let center = hit.portal_center(PORTAL_WIDTH).unwrap();
+
+    assert_eq!(center.x, 100.0 + PORTAL_WIDTH / 2.0);
+}
+
+#[test]
+fn portal_does_not_place_too_close_to_other_portal() {
+    let mut world = World::new();
+    let mut input = Input::new();
+
+    input.set_aim_pos(world.player.aim_from() + Vec2::X * 100.0);
+    input.set_key(GameKey::BluePortal, true);
+    input.update();
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    input.set_key(GameKey::BluePortal, false);
+    input.set_key(GameKey::OrangePortal, true);
+    input.update();
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.portals[0].is_some());
+    assert!(world.portals[1].is_none());
 }
