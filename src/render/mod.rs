@@ -1,5 +1,6 @@
 use glam::Vec2;
 
+use crate::constants::MAX_DASH_CHARGES;
 use crate::game::World;
 use crate::game::portal::Color;
 
@@ -19,10 +20,33 @@ impl Renderer {
 
         canvas.clear(Color::rgb(9, 10, 14));
 
+        for solid in &world.level.solids {
+            let fill = if solid.portalable {
+                Color::rgb(36, 42, 53)
+            } else {
+                Color::rgb(55, 45, 47)
+            };
+            canvas.fill_rect(
+                Rect {
+                    pos: solid.pos,
+                    size: solid.size,
+                },
+                fill,
+            );
+            canvas.rect_outline(
+                Rect {
+                    pos: solid.pos,
+                    size: solid.size,
+                },
+                Color::rgb(92, 105, 125),
+            );
+        }
+
         // Renderer looks at World, but does not touch it.
-        for portal in &world.portals {
+        for portal in world.portals.iter().flatten() {
             let (a, b) = portal.endpoints();
             canvas.draw_line(a, b, portal.color);
+            canvas.draw_line(portal.pos, portal.pos + portal.normal * 16.0, portal.color);
         }
 
         let player = &world.player;
@@ -32,7 +56,14 @@ impl Renderer {
             size: player.size,
         };
 
-        canvas.fill_rect(player_rect, Color::rgb(45, 49, 59));
+        let player_fill = if player.dashing {
+            Color::rgb(80, 92, 130)
+        } else if player.wall_sliding {
+            Color::rgb(62, 76, 92)
+        } else {
+            Color::rgb(45, 49, 59)
+        };
+        canvas.fill_rect(player_rect, player_fill);
         canvas.rect_outline(player_rect, Color::rgb(235, 238, 245));
 
         canvas.draw_line(player.aim_from(), player.aim_pos, Color::rgb(255, 70, 86));
@@ -43,6 +74,8 @@ impl Renderer {
             },
             Color::rgb(255, 70, 86),
         );
+
+        canvas.draw_dash_charges(player.dash_charges);
     }
 }
 
@@ -104,6 +137,29 @@ impl Canvas<'_> {
         self.draw_line(b, c, color);
         self.draw_line(c, d, color);
         self.draw_line(d, a, color);
+    }
+
+    fn draw_dash_charges(&mut self, charges: f32) {
+        let start = Vec2::new(18.0, 18.0);
+        let size = Vec2::new(42.0, 8.0);
+        let gap = 7.0;
+
+        for index in 0..MAX_DASH_CHARGES as usize {
+            let pos = start + Vec2::new(index as f32 * (size.x + gap), 0.0);
+            let filled = (charges - index as f32).clamp(0.0, 1.0);
+            let outline = Rect { pos, size };
+
+            self.rect_outline(outline, Color::rgb(180, 190, 205));
+            if filled > 0.0 {
+                self.fill_rect(
+                    Rect {
+                        pos: pos + Vec2::splat(1.0),
+                        size: Vec2::new((size.x - 2.0) * filled, size.y - 2.0),
+                    },
+                    Color::rgb(80, 190, 255),
+                );
+            }
+        }
     }
 
     fn draw_line(&mut self, a: Vec2, b: Vec2, color: Color) {

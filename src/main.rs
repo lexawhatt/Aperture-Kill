@@ -107,6 +107,12 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::ControlLeft) => {
                         self.input.set_key(GameKey::Slide, down);
                     }
+                    PhysicalKey::Code(KeyCode::KeyQ) => {
+                        self.input.set_key(GameKey::BluePortal, down);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyE) => {
+                        self.input.set_key(GameKey::OrangePortal, down);
+                    }
                     PhysicalKey::Code(KeyCode::Escape) if down => event_loop.exit(),
                     _ => {}
                 }

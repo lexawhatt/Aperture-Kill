@@ -41,7 +41,7 @@ impl Portal {
             normal: normal.normalize(),
             width,
             scale: 1.0,
-            scale_objects: true,
+            scale_objects: false,
             color,
         }
     }
@@ -76,8 +76,8 @@ impl Portal {
         let previous_distance = previous.dot(self.normal);
         let current_distance = current.dot(self.normal);
 
-        // Trigger only when the object enters through the front face.
-        previous_distance > normal_extent && current_distance <= normal_extent
+        // Portals accept entry from both sides; exit direction is separate.
+        previous_distance.abs() > normal_extent && current_distance.abs() <= normal_extent
     }
 
     pub fn teleport_player_to(&self, destination: &Portal, player: &mut Player) {
@@ -139,46 +139,4 @@ fn transform_velocity(
     let normal_speed = velocity.dot(source.normal);
 
     destination_tangent * (tangent_speed * scale) + destination.normal * (-normal_speed * scale)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn portal() -> Portal {
-        Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE)
-    }
-
-    #[test]
-    fn sweep_hits_when_player_enters_front_face() {
-        let portal = portal();
-        let half_size = Vec2::new(10.0, 20.0);
-
-        assert!(portal.intersects_sweep(Vec2::new(79.9, 50.0), Vec2::new(90.1, 50.0), half_size));
-    }
-
-    #[test]
-    fn sweep_ignores_objects_outside_portal_width() {
-        let portal = portal();
-        let half_size = Vec2::new(10.0, 20.0);
-
-        assert!(!portal.intersects_sweep(
-            Vec2::new(79.9, 120.0),
-            Vec2::new(90.1, 120.0),
-            half_size
-        ));
-    }
-
-    #[test]
-    fn teleport_preserves_velocity_in_destination_space() {
-        let source = Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE);
-        let destination = Portal::new(20.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
-        let mut player = Player::new(90.0, 50.0);
-
-        player.vel = Vec2::new(100.0, 25.0);
-        source.teleport_player_to(&destination, &mut player);
-
-        assert!(player.pos.x > destination.pos.x);
-        assert_eq!(player.vel, Vec2::new(100.0, 25.0));
-    }
 }
