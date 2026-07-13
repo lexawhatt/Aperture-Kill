@@ -2,6 +2,8 @@ use glam::Vec2;
 
 use crate::game::player::Player;
 
+const EXIT_PADDING: f32 = 2.0;
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: u8,
@@ -24,10 +26,8 @@ impl Color {
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Portal {
-    pub id: usize,
     pub pos: Vec2,
-    pub vel: Vec2,
-    pub normal: Vec2, // normalized. tells where the portal "front" looks
+    pub normal: Vec2,
     pub width: f32,
     pub scale: f32,
     pub scale_objects: bool,
@@ -35,11 +35,9 @@ pub struct Portal {
 }
 
 impl Portal {
-    pub fn new(id: usize, x: f32, y: f32, normal: Vec2, width: f32, color: Color) -> Self {
+    pub fn new(x: f32, y: f32, normal: Vec2, width: f32, color: Color) -> Self {
         Self {
-            id,
             pos: Vec2::new(x, y),
-            vel: Vec2::ZERO,
             normal: normal.normalize(),
             width,
             scale: 1.0,
@@ -49,57 +47,137 @@ impl Portal {
     }
 
     pub fn endpoints(&self) -> (Vec2, Vec2) {
-        // perpendicular to normal. portal line lives here
-        let dir = Vec2::new(-self.normal.y, self.normal.x);
-        let halfw = (self.width * self.scale) / 2.0;
+        let half_width = self.active_width() / 2.0;
 
-        (self.pos + dir * halfw, self.pos - dir * halfw)
+        (
+            self.pos + self.tangent() * half_width,
+            self.pos - self.tangent() * half_width,
+        )
     }
 
-    // now, the msot important part of this thign
-    pub fn tp_obj(&self, p2: &Portal, player: &mut Player) {
-        let scale = if self.scale_objects && p2.scale_objects {
-            p2.scale / self.scale
-        } else {
-            1.0
-        };
+    pub fn intersects_sweep(
+        &self,
+        previous_center: Vec2,
+        current_center: Vec2,
+        half_size: Vec2,
+    ) -> bool {
+        let previous = previous_center - self.pos;
+        let current = current_center - self.pos;
+        let tangent_extent = projected_extent(half_size, self.tangent());
+        let normal_extent = projected_extent(half_size, self.normal);
 
-        let tg = Vec2::new(-self.normal.y, self.normal.x);
-        let mut ex_tg = Vec2::new(-p2.normal.y, p2.normal.x);
-
-        if self.normal.dot(p2.normal) < -0.9 {
-            ex_tg = -ex_tg;
-        }
-
-        let offset = player.pos - self.pos;
-        let offset_tg = offset.dot(tg);
-
-        player.size *= scale;
-        player.pos = p2.pos + ex_tg * (offset_tg * scale);
-        player.pos += p2.normal * (player.half_size().length() + 1.0);
-        player.vel.y = 0.0;
-    }
-
-    pub fn check_coll(&self, p2: &Portal, player: &mut Player) -> bool {
-        let to_obj = player.pos - self.pos; // vec from portal center to player
-        let tg = Vec2::new(-self.normal.y, self.normal.x);
-
-        let dist_tg = to_obj.dot(tg);
-        let halfw = (self.width * self.scale) / 2.0; // check if player gets to portal
-
-        if dist_tg.abs() > halfw {
-            // if player goes beyond the portal width, then nope
+        let current_tangent = current.dot(self.tangent());
+        let half_width = self.active_width() / 2.0;
+        if current_tangent.abs() > half_width + tangent_extent {
             return false;
         }
 
-        let dist_to_pl = to_obj.dot(self.normal);
-        let hitbox_rad = player.half_size().length();
+        let previous_distance = previous.dot(self.normal);
+        let current_distance = current.dot(self.normal);
 
-        if dist_to_pl.abs() <= hitbox_rad {
-            self.tp_obj(p2, player); // Yay! collision detected! tp!
-            return true;
+        // Trigger only when the object enters through the front face.
+        previous_distance > normal_extent && current_distance <= normal_extent
+    }
+
+    pub fn teleport_player_to(&self, destination: &Portal, player: &mut Player) {
+        let scale = self.object_scale_to(destination);
+        let source_tangent = self.tangent();
+        let destination_tangent = destination.aligned_tangent(self);
+
+        let source_offset = player.pos - self.pos;
+        let tangent_offset = source_offset.dot(source_tangent) * scale;
+        let exit_distance =
+            projected_extent(player.half_size() * scale, destination.normal) + EXIT_PADDING;
+
+        player.size *= scale;
+        player.pos = destination.pos
+            + destination_tangent * tangent_offset
+            + destination.normal * exit_distance;
+        player.prev_pos = player.pos;
+        player.vel = transform_velocity(player.vel, self, destination, destination_tangent, scale);
+    }
+
+    fn active_width(&self) -> f32 {
+        self.width * self.scale
+    }
+
+    fn aligned_tangent(&self, source: &Portal) -> Vec2 {
+        let tangent = self.tangent();
+        if source.normal.dot(self.normal) < -0.9 {
+            -tangent
+        } else {
+            tangent
         }
+    }
 
-        false
+    fn object_scale_to(&self, destination: &Portal) -> f32 {
+        if self.scale_objects && destination.scale_objects {
+            destination.scale / self.scale
+        } else {
+            1.0
+        }
+    }
+
+    fn tangent(&self) -> Vec2 {
+        Vec2::new(-self.normal.y, self.normal.x)
+    }
+}
+
+fn projected_extent(half_size: Vec2, axis: Vec2) -> f32 {
+    half_size.x * axis.x.abs() + half_size.y * axis.y.abs()
+}
+
+fn transform_velocity(
+    velocity: Vec2,
+    source: &Portal,
+    destination: &Portal,
+    destination_tangent: Vec2,
+    scale: f32,
+) -> Vec2 {
+    let tangent_speed = velocity.dot(source.tangent());
+    let normal_speed = velocity.dot(source.normal);
+
+    destination_tangent * (tangent_speed * scale) + destination.normal * (-normal_speed * scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn portal() -> Portal {
+        Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE)
+    }
+
+    #[test]
+    fn sweep_hits_when_player_enters_front_face() {
+        let portal = portal();
+        let half_size = Vec2::new(10.0, 20.0);
+
+        assert!(portal.intersects_sweep(Vec2::new(79.9, 50.0), Vec2::new(90.1, 50.0), half_size));
+    }
+
+    #[test]
+    fn sweep_ignores_objects_outside_portal_width() {
+        let portal = portal();
+        let half_size = Vec2::new(10.0, 20.0);
+
+        assert!(!portal.intersects_sweep(
+            Vec2::new(79.9, 120.0),
+            Vec2::new(90.1, 120.0),
+            half_size
+        ));
+    }
+
+    #[test]
+    fn teleport_preserves_velocity_in_destination_space() {
+        let source = Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE);
+        let destination = Portal::new(20.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
+        let mut player = Player::new(90.0, 50.0);
+
+        player.vel = Vec2::new(100.0, 25.0);
+        source.teleport_player_to(&destination, &mut player);
+
+        assert!(player.pos.x > destination.pos.x);
+        assert_eq!(player.vel, Vec2::new(100.0, 25.0));
     }
 }

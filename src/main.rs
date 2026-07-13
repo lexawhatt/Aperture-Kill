@@ -15,7 +15,7 @@ use render::Renderer;
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -83,14 +83,6 @@ impl ApplicationHandler for App {
                 self.input
                     .set_aim_pos(Vec2::new(position.x as f32, position.y as f32));
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let down = state == ElementState::Pressed;
-                match button {
-                    MouseButton::Left => self.input.set_primary_fire(down),
-                    MouseButton::Right => self.input.set_secondary_fire(down),
-                    _ => {}
-                }
-            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
@@ -105,6 +97,15 @@ impl ApplicationHandler for App {
                     }
                     PhysicalKey::Code(KeyCode::KeyD | KeyCode::ArrowRight) => {
                         self.input.set_key(GameKey::Right, down);
+                    }
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        self.input.set_key(GameKey::Jump, down);
+                    }
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => {
+                        self.input.set_key(GameKey::Dash, down);
+                    }
+                    PhysicalKey::Code(KeyCode::ControlLeft) => {
+                        self.input.set_key(GameKey::Slide, down);
                     }
                     PhysicalKey::Code(KeyCode::Escape) if down => event_loop.exit(),
                     _ => {}

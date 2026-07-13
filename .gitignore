@@ -1,1 +1,7 @@
-/target
+/target/
+.idea/
+.vscode/
+.codex/
+.agents/
+.env
+.env.*

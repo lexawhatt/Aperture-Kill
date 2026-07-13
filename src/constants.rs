@@ -1,2 +1,16 @@
 pub const GRAVITY: f32 = 1600.0;
+pub const GROUND_ACCEL: f32 = 5200.0;
+pub const GROUND_FRICTION: f32 = 4200.0;
+pub const AIR_ACCEL: f32 = 2400.0;
+pub const AIR_DRAG: f32 = 0.08;
+pub const JUMP_BUFFER_TIME: f32 = 0.12;
+pub const JUMP_COYOTE_TIME: f32 = 0.10;
+pub const JUMP_VELOCITY: f32 = 760.0;
+pub const PLAYER_SIZE: (f32, f32) = (34.0, 72.0);
 pub const PLAYER_SPEED: f32 = 420.0;
+pub const SLIDE_BOOST: f32 = 640.0;
+pub const SLIDE_FRICTION: f32 = 900.0;
+pub const DASH_COOLDOWN: f32 = 0.55;
+pub const DASH_DURATION: f32 = 0.12;
+pub const DASH_SPEED: f32 = 980.0;
+pub const TELEPORT_COOLDOWN: f32 = 0.18;
