@@ -66,6 +66,7 @@ impl Portal {
         let tangent_extent = projected_extent(half_size, self.tangent());
         let normal_extent = projected_extent(half_size, self.normal);
 
+        // First reject objects that missed the portal span.
         let current_tangent = current.dot(self.tangent());
         let half_width = self.active_width() / 2.0;
         if current_tangent.abs() > half_width + tangent_extent {

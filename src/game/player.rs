@@ -50,6 +50,7 @@ impl Player {
         self.prev_pos = self.pos;
         self.aim_pos = input.aim_pos;
 
+        // Update intent-driven state before integrating position.
         self.tick_timers(dt);
         self.track_jump_window(input);
         self.start_dash(input);
@@ -92,9 +93,12 @@ impl Player {
     }
 
     fn track_jump_window(&mut self, input: &Input) {
+        // Facing is used when dash/slide has no stronger direction.
         if input.move_x != 0.0 {
             self.facing = input.move_x.signum();
         }
+
+        // Jump buffer accepts slightly early jump inputs.
         if input.jump_pressed {
             self.jump_buffer = JUMP_BUFFER_TIME;
         }
@@ -105,6 +109,7 @@ impl Player {
             return;
         }
 
+        // Dash uses aim direction, falling back to facing direction.
         self.dash_dir = self.input_direction(input);
         self.dash_timer = DASH_DURATION;
         self.dash_cooldown = DASH_COOLDOWN;
@@ -121,6 +126,7 @@ impl Player {
         self.try_jump();
         self.sliding = input.slide_down && self.on_ground && self.vel.x.abs() > PLAYER_SPEED * 0.35;
         if input.slide_pressed && self.on_ground {
+            // Slide starts from current momentum, or facing if standing still.
             let slide_dir = if self.vel.x.abs() > 1.0 {
                 self.vel.x.signum()
             } else {
@@ -149,6 +155,7 @@ impl Player {
     }
 
     fn try_jump(&mut self) {
+        // Coyote time allows jumping shortly after leaving the ground.
         if self.jump_buffer == 0.0 || self.coyote_timer == 0.0 {
             return;
         }

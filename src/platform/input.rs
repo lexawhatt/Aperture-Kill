@@ -46,10 +46,12 @@ impl Input {
     }
 
     pub fn update(&mut self) {
+        // Edge flags are true for one frame after the key is pressed.
         self.dash_pressed = self.dash_down && !self.dash_was_down;
         self.jump_pressed = self.jump_down && !self.jump_was_down;
         self.slide_pressed = self.slide_down && !self.slide_was_down;
 
+        // Convert held movement keys into one horizontal intent value.
         self.move_x = 0.0;
         if self.left_down {
             self.move_x -= 1.0;

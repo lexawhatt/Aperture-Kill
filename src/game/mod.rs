@@ -34,6 +34,7 @@ impl World {
 
         self.player.update(dt, input, screen_width, screen_height);
 
+        // Teleport is checked after movement so sweep uses this frame's path.
         if self.teleport_cooldown == 0.0 && self.try_teleport() {
             self.teleport_cooldown = TELEPORT_COOLDOWN;
             self.player.constrain_to_screen(screen_width, screen_height);
