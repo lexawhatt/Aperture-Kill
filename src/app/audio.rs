@@ -39,14 +39,24 @@ impl Audio {
                 ground_slam: None,
                 doors: HashMap::new(),
             },
-            Err(_) => Self {
-                _stream: None,
-                handle: None,
-                dash: None,
-                slide: None,
-                ground_slam: None,
-                doors: HashMap::new(),
-            },
+            Err(err) => {
+                eprintln!(
+                    "Audio disabled: failed to initialize the system audio backend: {err}\n\
+                     On Linux, install ALSA runtime packages and restart the game.\n\
+                     Ubuntu/Debian: sudo apt install libasound2\n\
+                     Fedora: sudo dnf install alsa-lib\n\
+                     Arch: sudo pacman -S alsa-lib"
+                );
+
+                Self {
+                    _stream: None,
+                    handle: None,
+                    dash: None,
+                    slide: None,
+                    ground_slam: None,
+                    doors: HashMap::new(),
+                }
+            }
         }
     }
 
