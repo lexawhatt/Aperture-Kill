@@ -1,11 +1,13 @@
 use glam::Vec2;
 
 use super::World;
-use super::level::{Level, Solid};
-use super::player::Player;
+use super::level::{Checkpoint, Door, Hazard, Level, Solid};
+use super::player::{Player, PlayerEvent};
 use super::portal::{Color, Portal};
 use crate::constants::{
-    DASH_SPEED, MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED, PORTAL_WIDTH, WALL_SLIDE_SPEED,
+    DASH_SPEED, GRAVITY, JUMP_VELOCITY, MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED,
+    PORTAL_SURFACE_OFFSET, PORTAL_WIDTH, SLAM_NORMAL_HEIGHT_GAIN, SLIDE_BOOST, WALL_JUMP_Y,
+    WALL_SLIDE_SPEED,
 };
 use crate::platform::input::{GameKey, Input};
 
@@ -14,9 +16,21 @@ fn test_portal() -> Portal {
 }
 
 #[test]
+fn automatic_door_opens_near_player() {
+    let mut door = Door::new(100.0, 100.0, 48.0, 112.0);
+    let closed_y = door.solid.pos.y;
+
+    door.update(door.solid.center(), 0.5);
+
+    assert!(door.open > 0.0);
+    assert!(door.moving_solid().pos.y < closed_y);
+}
+
+#[test]
 fn raycast_hits_first_portalable_wall() {
     let level = Level {
         solids: vec![Solid::new(100.0, 0.0, 20.0, 100.0, true)],
+        ..Level::empty()
     };
 
     let hit = level
@@ -25,6 +39,70 @@ fn raycast_hits_first_portalable_wall() {
 
     assert_eq!(hit.point, Vec2::new(100.0, 50.0));
     assert_eq!(hit.normal, Vec2::new(-1.0, 0.0));
+}
+
+#[test]
+fn raycast_hits_rotated_portalable_wall() {
+    let solid = Solid::rotated(100.0, 100.0, 120.0, 20.0, std::f32::consts::FRAC_PI_4, true);
+    let level = Level {
+        solids: vec![solid],
+        ..Level::empty()
+    };
+    let origin = solid.center() - solid.axis_y() * 100.0;
+    let target = solid.center();
+    let hit = level.raycast_portalable(origin, target).unwrap();
+
+    assert!(hit.normal.dot(-solid.axis_y()) > 0.99);
+}
+
+#[test]
+fn portal_shot_places_on_rotated_portalable_block() {
+    let solid = Solid::rotated(320.0, 240.0, 180.0, 28.0, std::f32::consts::FRAC_PI_6, true);
+    let mut world = World::new();
+    let mut input = Input::new();
+    let origin = solid.center() - solid.axis_y() * 180.0;
+    let target = solid.center();
+
+    world.level = Level {
+        solids: vec![solid],
+        ..Level::empty()
+    };
+    world.player = Player::new(origin.x, origin.y + 20.0);
+    input.set_aim_pos(target);
+    input.set_key(GameKey::BluePortal, true);
+    input.update();
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let portal = world.portals[0].unwrap();
+    assert!(portal.normal.dot(-solid.axis_y()) > 0.99);
+    assert!(portal.tangent().dot(solid.axis_x()).abs() > 0.99);
+}
+
+#[test]
+fn portal_shot_places_on_rotated_block_inside_level() {
+    let solid = Solid::rotated(370.0, 290.0, 160.0, 32.0, std::f32::consts::FRAC_PI_4, true);
+    let mut world = World::new();
+    let mut input = Input::new();
+    let origin = solid.center() - solid.axis_y() * 180.0;
+    let target = solid.center();
+
+    world.level.solids = vec![
+        Solid::new(0.0, 560.0, 900.0, 40.0, true),
+        Solid::new(0.0, 0.0, 30.0, 600.0, true),
+        Solid::new(870.0, 0.0, 30.0, 600.0, true),
+        Solid::new(0.0, 0.0, 900.0, 30.0, true),
+        solid,
+    ];
+    world.player = Player::new(origin.x, origin.y + 20.0);
+    input.set_aim_pos(target);
+    input.set_key(GameKey::BluePortal, true);
+    input.update();
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let portal = world.portals[0].unwrap();
+    assert!(portal.normal.dot(-solid.axis_y()) > 0.99);
 }
 
 #[test]
@@ -40,6 +118,23 @@ fn jump_uses_buffered_press_on_ground() {
 
     assert!(player.vel.y < 0.0);
     assert!(!player.on_ground);
+}
+
+#[test]
+fn jump_emits_sound_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::Jump)
+    );
 }
 
 #[test]
@@ -59,6 +154,43 @@ fn dash_follows_aim_direction() {
 }
 
 #[test]
+fn dash_emits_sound_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_aim_pos(player.aim_from() + Vec2::X * 100.0);
+    input.set_key(GameKey::Dash, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::DashStart)
+    );
+}
+
+#[test]
+fn dash_end_emits_sound_stop_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_aim_pos(player.aim_from() + Vec2::X * 100.0);
+    input.set_key(GameKey::Dash, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.drain_events().for_each(drop);
+    input.update();
+    player.update(1.0, &input, 900.0, 600.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::DashEnd)
+    );
+}
+
+#[test]
 fn dash_spends_one_charge() {
     let mut player = Player::new(100.0, 100.0);
     let mut input = Input::new();
@@ -71,6 +203,66 @@ fn dash_spends_one_charge() {
 
     assert!(player.dash_charges < MAX_DASH_CHARGES);
     assert!(player.dash_charges > MAX_DASH_CHARGES - 1.1);
+}
+
+#[test]
+fn screen_floor_does_not_zero_fall_speed() {
+    let mut player = Player::new(100.0, 550.0);
+    let input = Input::new();
+
+    player.vel.y = 1_000.0;
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.y > 1_000.0);
+    assert!(player.pos.y > 564.0);
+}
+
+#[test]
+fn high_speed_player_is_not_clamped_to_level_bounds() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level.solids.clear();
+    world.player.pos = Vec2::new(450.0, 300.0);
+    world.player.prev_pos = world.player.pos;
+    world.player.vel = Vec2::new(0.0, 50_000.0);
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.player.pos.y > 600.0);
+    assert!(world.player.vel.y > 50_000.0);
+}
+
+#[test]
+fn hazard_respawns_player_at_last_checkpoint() {
+    let mut world = World::new();
+    let input = Input::new();
+    let checkpoint = Checkpoint::new(180.0, 200.0, 40.0, 80.0);
+    let checkpoint_center = checkpoint.center();
+    let hazard = Hazard::new(380.0, 200.0, 80.0, 80.0);
+
+    world.level = Level {
+        checkpoints: vec![checkpoint],
+        hazards: vec![hazard],
+        ..Level::empty()
+    };
+    world.player = Player::new(checkpoint_center.x, checkpoint_center.y);
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    world.player = Player::new(hazard.solid.center().x, hazard.solid.center().y);
+    world.portals = [
+        Some(Portal::new(
+            120.0,
+            220.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::BLUE,
+        )),
+        None,
+    ];
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.player.pos.distance(checkpoint_center) < 0.001);
+    assert!(world.portals.iter().all(Option::is_none));
 }
 
 #[test]
@@ -124,11 +316,203 @@ fn dash_charge_does_not_recover_while_sliding() {
 }
 
 #[test]
+fn ctrl_in_air_starts_ground_slam() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.ground_slamming);
+    assert!(player.vel.y > 100.0);
+}
+
+#[test]
+fn ground_slam_emits_sound_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::GroundSlamStart)
+    );
+}
+
+#[test]
+fn ground_slam_end_emits_sound_stop_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.drain_events().for_each(drop);
+    player.touch_ground_with_impact(500.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::GroundSlamEnd)
+    );
+}
+
+#[test]
+fn slide_end_emits_sound_stop_event() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.drain_events().for_each(drop);
+    input.set_key(GameKey::Slide, false);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(
+        player
+            .drain_events()
+            .any(|event| event == PlayerEvent::SlideEnd)
+    );
+}
+
+#[test]
+fn normal_slam_bounce_gives_small_boost() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.touch_ground_with_impact(500.0);
+
+    input.set_key(GameKey::Slide, false);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.y < -JUMP_VELOCITY);
+    assert!(player.vel.y > -JUMP_VELOCITY * 1.4);
+}
+
+#[test]
+fn long_fall_slam_bounce_returns_impact_height() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.vel.y = 1_800.0;
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    let natural_speed = (1_800.0_f32.powi(2) + 2.0 * GRAVITY * (player.pos.y - 100.0)).sqrt();
+    player.touch_ground_with_impact(2_600.0);
+
+    input.set_key(GameKey::Slide, false);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let expected_speed = natural_speed * SLAM_NORMAL_HEIGHT_GAIN.sqrt();
+    let gravity_after_jump = GRAVITY / 60.0;
+    assert!((player.vel.y + expected_speed - gravity_after_jump).abs() < 1.0);
+}
+
+#[test]
+fn slam_bounce_uses_height_not_slam_acceleration() {
+    let mut player = Player::new(100.0, 343.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.pos.y = 520.0;
+    player.touch_ground_with_impact(2_600.0);
+
+    input.set_key(GameKey::Slide, false);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let fall_height = 520.0 - 343.0;
+    let expected_speed = (2.0 * GRAVITY * fall_height * SLAM_NORMAL_HEIGHT_GAIN).sqrt();
+    let gravity_after_jump = GRAVITY / 60.0;
+    assert!((player.vel.y + expected_speed - gravity_after_jump).abs() < 1.0);
+}
+
+#[test]
+fn stored_slam_dive_converts_energy_forward() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_aim_pos(Vec2::new(200.0, 100.0));
+    player.vel.y = 1_800.0;
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.touch_ground_with_impact(2_600.0);
+
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.x > SLIDE_BOOST * 2.0);
+    assert!(player.vel.y < 0.0);
+}
+
+#[test]
+fn wall_jump_after_slam_stores_energy_without_fast_fall() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.set_wall_contact(1.0);
+    input.set_key(GameKey::Slide, true);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(!player.ground_slamming);
+    assert!(player.vel.y <= -WALL_JUMP_Y + 50.0);
+
+    player.touch_ground_with_impact(100.0);
+    input.set_key(GameKey::Slide, false);
+    input.set_key(GameKey::Jump, false);
+    input.update();
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.y < -JUMP_VELOCITY * 1.3);
+}
+
+#[test]
 fn wall_jump_pushes_player_away_from_wall() {
     let mut player = Player::new(100.0, 100.0);
     let mut input = Input::new();
 
     player.set_wall_contact(1.0);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.x < 0.0);
+    assert!(player.vel.y < 0.0);
+}
+
+#[test]
+fn wall_jump_keeps_direction_after_contact_frame() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.set_wall_contact(1.0);
+    player.clear_contacts();
     input.set_key(GameKey::Jump, true);
     input.update();
 
@@ -178,19 +562,36 @@ fn fourth_wall_jump_requires_landing() {
 }
 
 #[test]
-fn sweep_hits_when_player_enters_front_face() {
+fn sweep_waits_until_center_crosses_front_face() {
     let portal = test_portal();
     let half_size = Vec2::new(10.0, 20.0);
 
-    assert!(portal.intersects_sweep(Vec2::new(79.9, 50.0), Vec2::new(90.1, 50.0), half_size));
+    assert_eq!(
+        portal.crossing_time(Vec2::new(79.9, 50.0), Vec2::new(90.1, 50.0), half_size),
+        None
+    );
 }
 
 #[test]
-fn sweep_hits_when_player_enters_back_face() {
+fn sweep_hits_when_center_crosses_front_face() {
     let portal = test_portal();
     let half_size = Vec2::new(10.0, 20.0);
 
-    assert!(portal.intersects_sweep(Vec2::new(120.1, 50.0), Vec2::new(109.9, 50.0), half_size));
+    assert_eq!(
+        portal.crossing_time(Vec2::new(90.0, 50.0), Vec2::new(110.0, 50.0), half_size),
+        Some(0.5)
+    );
+}
+
+#[test]
+fn sweep_hits_when_center_crosses_back_face() {
+    let portal = test_portal();
+    let half_size = Vec2::new(10.0, 20.0);
+
+    assert_eq!(
+        portal.crossing_time(Vec2::new(110.0, 50.0), Vec2::new(90.0, 50.0), half_size),
+        Some(0.5)
+    );
 }
 
 #[test]
@@ -198,20 +599,207 @@ fn sweep_ignores_objects_outside_portal_width() {
     let portal = test_portal();
     let half_size = Vec2::new(10.0, 20.0);
 
-    assert!(!portal.intersects_sweep(Vec2::new(79.9, 120.0), Vec2::new(90.1, 120.0), half_size));
+    assert_eq!(
+        portal.crossing_time(Vec2::new(90.0, 120.0), Vec2::new(110.0, 120.0), half_size),
+        None
+    );
 }
 
 #[test]
 fn teleport_preserves_velocity_in_destination_space() {
     let source = Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE);
     let destination = Portal::new(20.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
-    let mut player = Player::new(90.0, 50.0);
+    let mut player = Player::new(102.0, 50.0);
 
     player.vel = Vec2::new(100.0, 25.0);
     source.teleport_player_to(&destination, &mut player);
 
     assert!(player.pos.x > destination.pos.x);
     assert_eq!(player.vel, Vec2::new(100.0, 25.0));
+}
+
+#[test]
+fn teleport_places_player_clear_of_destination_wall() {
+    let source = Portal::new(100.0, 50.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE);
+    let destination = Portal::new(20.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
+    let mut player = Player::new(100.5, 50.0);
+
+    source.teleport_player_to(&destination, &mut player);
+
+    assert!(player.pos.x >= destination.pos.x + player.half_size().x);
+}
+
+#[test]
+fn teleport_through_rotated_portals_preserves_speed() {
+    let source = Portal::with_tangent(
+        100.0,
+        100.0,
+        Vec2::new(0.0, -1.0),
+        Vec2::X,
+        96.0,
+        Color::BLUE,
+    );
+    let angle = std::f32::consts::FRAC_PI_4;
+    let normal = Vec2::new(angle.cos(), angle.sin());
+    let tangent = Vec2::new(-angle.sin(), angle.cos());
+    let destination = Portal::with_tangent(300.0, 200.0, normal, tangent, 96.0, Color::ORANGE);
+    let mut player = Player::new(100.0, 104.0);
+
+    player.prev_pos = Vec2::new(100.0, 90.0);
+    player.vel = Vec2::new(120.0, 900.0);
+    let speed = player.vel.length();
+    source.teleport_player_to(&destination, &mut player);
+
+    assert!((player.vel.length() - speed).abs() < 0.01);
+    assert!(player.vel.dot(destination.normal()) > 0.0);
+}
+
+#[test]
+fn world_portal_exit_from_rotated_block_preserves_momentum() {
+    let ramp = Solid::rotated(520.0, 330.0, 180.0, 32.0, std::f32::consts::FRAC_PI_4, true);
+    let ramp_surface = ramp.world_from_local(Vec2::new(ramp.size.x / 2.0, 0.0));
+    let ramp_normal = -ramp.axis_y();
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level.solids = vec![
+        Solid::new(0.0, 560.0, 900.0, 40.0, true),
+        Solid::new(0.0, 0.0, 30.0, 600.0, true),
+        Solid::new(870.0, 0.0, 30.0, 600.0, true),
+        Solid::new(0.0, 0.0, 900.0, 30.0, true),
+        ramp,
+    ];
+    world.portals = [
+        Some(Portal::with_tangent(
+            350.0,
+            560.0 - PORTAL_SURFACE_OFFSET,
+            Vec2::new(0.0, -1.0),
+            Vec2::X,
+            PORTAL_WIDTH,
+            Color::BLUE,
+        )),
+        Some(Portal::with_tangent(
+            ramp_surface.x + ramp_normal.x * PORTAL_SURFACE_OFFSET,
+            ramp_surface.y + ramp_normal.y * PORTAL_SURFACE_OFFSET,
+            ramp_normal,
+            ramp.axis_x(),
+            PORTAL_WIDTH,
+            Color::ORANGE,
+        )),
+    ];
+    world.player = Player::new(350.0, 548.0);
+    world.player.vel = Vec2::new(0.0, 1_100.0);
+    let speed = world.player.vel.length();
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let exit = world.portals[1].unwrap();
+    assert!(world.player.vel.length() >= speed * 0.98);
+    assert!(world.player.vel.dot(exit.normal()) > 0.0);
+}
+
+#[test]
+fn mapped_body_keeps_only_passed_slice_size() {
+    let source = Portal::new(100.0, 560.0, Vec2::new(0.0, -1.0), 80.0, Color::BLUE);
+    let destination = Portal::new(20.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
+    let slice_center = Vec2::new(100.0, 561.0);
+    let slice_size = Vec2::new(34.0, 2.0);
+    let (_, mapped_size) = source.map_body_to(&destination, slice_center, slice_size);
+
+    assert_eq!(mapped_size, Vec2::new(2.0, 34.0));
+}
+
+#[test]
+fn active_portal_opens_wall_collision() {
+    let level = Level {
+        solids: vec![Solid::new(100.0, 0.0, 20.0, 120.0, true)],
+        ..Level::empty()
+    };
+    let portal = Portal::new(
+        100.0 - PORTAL_SURFACE_OFFSET,
+        50.0,
+        Vec2::new(-1.0, 0.0),
+        80.0,
+        Color::BLUE,
+    );
+    let mut player = Player::new(105.0, 50.0);
+
+    level.resolve_player_with_portals(&mut player, &[portal]);
+
+    assert_eq!(player.pos, Vec2::new(105.0, 50.0));
+}
+
+#[test]
+fn portal_does_not_open_back_side_collision() {
+    let level = Level {
+        solids: vec![Solid::new(100.0, 0.0, 20.0, 120.0, true)],
+        ..Level::empty()
+    };
+    let portal = Portal::new(
+        100.0 - PORTAL_SURFACE_OFFSET,
+        50.0,
+        Vec2::new(-1.0, 0.0),
+        80.0,
+        Color::BLUE,
+    );
+    let mut player = Player::new(125.0, 50.0);
+    let before = player.pos;
+
+    level.resolve_player_with_portals(&mut player, &[portal]);
+
+    assert!(player.pos.x > before.x);
+}
+
+#[test]
+fn rotated_portal_opens_only_its_surface() {
+    let solid = Solid::rotated(250.0, 250.0, 180.0, 36.0, std::f32::consts::FRAC_PI_6, true);
+    let surface = solid.world_from_local(Vec2::new(solid.size.x / 2.0, 0.0));
+    let normal = -solid.axis_y();
+    let portal = Portal::new(
+        surface.x + normal.x * PORTAL_SURFACE_OFFSET,
+        surface.y + normal.y * PORTAL_SURFACE_OFFSET,
+        normal,
+        96.0,
+        Color::BLUE,
+    );
+    let mut player = Player::new(surface.x + normal.x * 12.0, surface.y + normal.y * 12.0);
+    let before = player.pos;
+    let level = Level {
+        solids: vec![solid],
+        ..Level::empty()
+    };
+
+    level.resolve_player_with_portals(&mut player, &[portal]);
+
+    assert_eq!(player.pos, before);
+}
+
+#[test]
+fn portal_does_not_open_rotated_solid_edges() {
+    let solid = Solid::rotated(250.0, 250.0, 180.0, 36.0, std::f32::consts::FRAC_PI_6, true);
+    let surface = solid.world_from_local(Vec2::new(solid.size.x / 2.0, 0.0));
+    let normal = -solid.axis_y();
+    let portal = Portal::new(
+        surface.x + normal.x * PORTAL_SURFACE_OFFSET,
+        surface.y + normal.y * PORTAL_SURFACE_OFFSET,
+        normal,
+        220.0,
+        Color::BLUE,
+    );
+    let side = solid.world_from_local(Vec2::new(solid.size.x, solid.size.y / 2.0));
+    let mut player = Player::new(
+        side.x + solid.axis_x().x * 8.0,
+        side.y + solid.axis_x().y * 8.0,
+    );
+    let before = player.pos;
+    let level = Level {
+        solids: vec![solid],
+        ..Level::empty()
+    };
+
+    level.resolve_player_with_portals(&mut player, &[portal]);
+
+    assert!(player.pos.distance(before) > 0.1);
 }
 
 #[test]
@@ -247,6 +835,7 @@ fn portal_does_not_place_on_too_small_surface() {
 fn portal_shot_near_surface_edge_slides_inward() {
     let level = Level {
         solids: vec![Solid::new(100.0, 0.0, 200.0, 20.0, true)],
+        ..Level::empty()
     };
 
     let hit = level
@@ -255,6 +844,57 @@ fn portal_shot_near_surface_edge_slides_inward() {
     let center = hit.portal_center(PORTAL_WIDTH).unwrap();
 
     assert_eq!(center.x, 100.0 + PORTAL_WIDTH / 2.0);
+}
+
+#[test]
+fn rotated_portal_placement_slides_in_surface_space() {
+    let solid = Solid::rotated(220.0, 160.0, 180.0, 28.0, std::f32::consts::FRAC_PI_6, true);
+    let level = Level {
+        solids: vec![solid],
+        ..Level::empty()
+    };
+    let shot = solid.world_from_local(Vec2::new(8.0, -120.0));
+    let target = solid.world_from_local(Vec2::new(8.0, 16.0));
+    let hit = level.raycast_portalable(shot, target).unwrap();
+    let center = level.portal_center(hit, PORTAL_WIDTH).unwrap();
+    let surface = center - hit.normal * PORTAL_SURFACE_OFFSET;
+    let local = solid.local_from_world(surface);
+
+    assert!((local.x - PORTAL_WIDTH / 2.0).abs() < 0.01);
+    assert!(local.y.abs() < 0.01);
+}
+
+#[test]
+fn placed_portal_sits_outside_surface() {
+    let level = Level {
+        solids: vec![Solid::new(100.0, 0.0, 20.0, 100.0, true)],
+        ..Level::empty()
+    };
+
+    let hit = level
+        .raycast_portalable(Vec2::new(0.0, 50.0), Vec2::new(300.0, 50.0))
+        .unwrap();
+    let center = level.portal_center(hit, PORTAL_WIDTH).unwrap();
+
+    assert_eq!(center.x, 100.0 - PORTAL_SURFACE_OFFSET);
+}
+
+#[test]
+fn portal_placement_avoids_adjacent_walls() {
+    let level = Level {
+        solids: vec![
+            Solid::new(0.0, 560.0, 900.0, 40.0, true),
+            Solid::new(0.0, 0.0, 30.0, 600.0, true),
+        ],
+        ..Level::empty()
+    };
+
+    let hit = level
+        .raycast_portalable(Vec2::new(50.0, 500.0), Vec2::new(50.0, 590.0))
+        .unwrap();
+    let center = level.portal_center(hit, PORTAL_WIDTH).unwrap();
+
+    assert!(center.x - PORTAL_WIDTH / 2.0 >= 31.0);
 }
 
 #[test]

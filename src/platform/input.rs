@@ -11,7 +11,7 @@ pub enum GameKey {
     Slide,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Input {
     pub move_x: f32,
     pub aim_pos: Vec2,
@@ -53,6 +53,24 @@ impl Input {
 
     pub fn set_aim_pos(&mut self, aim_pos: Vec2) {
         self.aim_pos = aim_pos;
+    }
+
+    pub fn release_gameplay(&mut self) {
+        self.blue_portal_down = false;
+        self.dash_down = false;
+        self.jump_down = false;
+        self.left_down = false;
+        self.orange_portal_down = false;
+        self.right_down = false;
+        self.slide_down = false;
+    }
+
+    pub fn consume_presses(&mut self) {
+        self.blue_portal_pressed = false;
+        self.dash_pressed = false;
+        self.jump_pressed = false;
+        self.orange_portal_pressed = false;
+        self.slide_pressed = false;
     }
 
     pub fn update(&mut self) {
