@@ -18,6 +18,11 @@ impl App {
         event_loop: &ActiveEventLoop,
     ) {
         if let PhysicalKey::Code(code) = key {
+            // Binding capture owns the next key press so global shortcuts cannot hijack it.
+            if self.mode == AppMode::Options && self.binding_capture.is_some() && down {
+                self.handle_options_key(code);
+                return;
+            }
             if self.handle_global_key(code, down, event_loop) {
                 return;
             }
@@ -25,16 +30,25 @@ impl App {
             match self.mode {
                 AppMode::Playing => self.handle_game_key(code, down),
                 AppMode::LevelMenu if down => self.handle_menu_key(code),
+                AppMode::Changelog if down => self.handle_changelog_key(code),
+                AppMode::Options if down => self.handle_options_key(code),
                 AppMode::Editor => self.handle_editor_key(code, down),
                 _ => {}
             }
         }
     }
 
-    pub(super) fn handle_mouse(&mut self, button: MouseButton, down: bool) {
+    pub(super) fn handle_mouse(
+        &mut self,
+        button: MouseButton,
+        down: bool,
+        event_loop: &ActiveEventLoop,
+    ) {
         match self.mode {
             AppMode::Playing => {}
-            AppMode::LevelMenu => self.handle_menu_mouse(button, down),
+            AppMode::LevelMenu => self.handle_menu_mouse(button, down, event_loop),
+            AppMode::Changelog => self.handle_changelog_mouse(button, down),
+            AppMode::Options => self.handle_options_mouse(button, down),
             AppMode::Editor => self.handle_editor_mouse(button, down),
         }
     }

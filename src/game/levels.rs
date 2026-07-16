@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 // Small text level format: name, spawn, then solid rows.
 use glam::Vec2;
 
-use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid};
+use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
+use crate::game::portal::{Color, Portal};
 
 const LEVEL_DIR: &str = "levels";
 
@@ -18,6 +19,7 @@ pub struct LevelSpec {
     pub hazards: Vec<Hazard>,
     pub checkpoints: Vec<Checkpoint>,
     pub texts: Vec<LevelText>,
+    pub world_portals: Vec<WorldPortal>,
     pub path: Option<PathBuf>,
 }
 
@@ -31,30 +33,18 @@ impl LevelSpec {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             texts: Vec::new(),
+            world_portals: Vec::new(),
             path: None,
         }
     }
 
-    pub fn from_world(
-        name: String,
-        spawn: Vec2,
-        solids: Vec<Solid>,
-        doors: Vec<Door>,
-        hazards: Vec<Hazard>,
-        checkpoints: Vec<Checkpoint>,
-        texts: Vec<LevelText>,
-        path: Option<PathBuf>,
-    ) -> Self {
-        Self {
-            name,
-            spawn,
-            solids,
-            doors,
-            hazards,
-            checkpoints,
-            texts,
-            path,
-        }
+    pub fn replace_world(&mut self, world: &Level) {
+        self.solids = world.solids.clone();
+        self.doors = world.doors.clone();
+        self.hazards = world.hazards.clone();
+        self.checkpoints = world.checkpoints.clone();
+        self.texts = world.texts.clone();
+        self.world_portals = world.world_portals.clone();
     }
 
     pub fn level(&self) -> Level {
@@ -64,6 +54,7 @@ impl LevelSpec {
             hazards: self.hazards.clone(),
             checkpoints: self.checkpoints.clone(),
             texts: self.texts.clone(),
+            world_portals: self.world_portals.clone(),
         }
     }
 }
@@ -79,7 +70,13 @@ pub fn load_levels() -> Vec<LevelSpec> {
                 return None;
             }
 
-            parse_level_file(&path).ok()
+            match parse_level_file(&path) {
+                Ok(level) => Some(level),
+                Err(err) => {
+                    eprintln!("Skipping unreadable level {}: {err}", path.display());
+                    None
+                }
+            }
         })
         .collect::<Vec<_>>();
 
@@ -97,6 +94,7 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
         .path
         .clone()
         .unwrap_or_else(|| PathBuf::from(LEVEL_DIR).join(format!("{}.lvl", slug(&level.name))));
+    // Keep the file format intentionally plain so levels remain editable outside the game.
     let mut body = String::new();
 
     body.push_str(&format!("name {}\n", level.name));
@@ -104,18 +102,25 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
     for solid in &level.solids {
         body.push_str(&format!(
             "solid {} {} {} {} {} {}\n",
-            solid.pos.x, solid.pos.y, solid.size.x, solid.size.y, solid.portalable, solid.rotation
+            solid.pos.x,
+            solid.pos.y,
+            solid.size.x,
+            solid.size.y,
+            solid.portalable,
+            solid.rotation()
         ));
     }
     for door in &level.doors {
         body.push_str(&format!(
-            "door {} {} {} {} {} {}\n",
+            "door {} {} {} {} {} {} {} {}\n",
             door.solid.pos.x,
             door.solid.pos.y,
             door.solid.size.x,
             door.solid.size.y,
             door.trigger_radius,
-            door.solid.rotation
+            door.solid.rotation(),
+            door.speed,
+            door.automatic
         ));
     }
     for hazard in &level.hazards {
@@ -125,7 +130,7 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             hazard.solid.pos.y,
             hazard.solid.size.x,
             hazard.solid.size.y,
-            hazard.solid.rotation
+            hazard.solid.rotation()
         ));
     }
     for checkpoint in &level.checkpoints {
@@ -143,6 +148,21 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             text.pos.x,
             text.pos.y,
             text.text.replace('\n', " ")
+        ));
+    }
+    for portal in &level.world_portals {
+        body.push_str(&format!(
+            "world_portal {} {} {} {} {} {} {} {} {} {}\n",
+            portal.portal.pos.x,
+            portal.portal.pos.y,
+            portal.portal.normal().x,
+            portal.portal.normal().y,
+            portal.portal.tangent().x,
+            portal.portal.tangent().y,
+            portal.portal.width,
+            portal.id,
+            portal.receiver_id,
+            portal.priority
         ));
     }
 
@@ -165,6 +185,7 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
     let mut hazards = Vec::new();
     let mut checkpoints = Vec::new();
     let mut texts = Vec::new();
+    let mut world_portals = Vec::new();
 
     for line in source.lines() {
         let line = line.trim();
@@ -199,6 +220,10 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 let Some(h) = parse_next(&mut parts) else {
                     continue;
                 };
+                // Skip a bad row instead of letting negative or zero extents poison collision math.
+                if !valid_size(w, h) {
+                    continue;
+                }
                 let portalable = parts.next().is_none_or(|value| value != "false");
                 let rotation = parse_next(&mut parts).unwrap_or(0.0);
 
@@ -217,11 +242,22 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 let Some(h) = parse_next(&mut parts) else {
                     continue;
                 };
-                let trigger_radius = parse_next(&mut parts).unwrap_or(112.0);
+                if !valid_size(w, h) {
+                    continue;
+                }
+                let trigger_radius = parse_next(&mut parts)
+                    .filter(|value| *value > 0.0)
+                    .unwrap_or(112.0);
                 let rotation = parse_next(&mut parts).unwrap_or(0.0);
+                let speed = parse_next(&mut parts)
+                    .filter(|value| *value > 0.0)
+                    .unwrap_or(3.6);
+                let automatic = parts.next().is_none_or(|value| value != "false");
                 let mut door = Door::with_radius(x, y, w, h, trigger_radius);
 
-                door.solid.rotation = rotation;
+                door.solid.set_rotation(rotation);
+                door.speed = speed.max(0.1);
+                door.automatic = automatic;
                 doors.push(door);
             }
             Some("hazard") => {
@@ -237,10 +273,13 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 let Some(h) = parse_next(&mut parts) else {
                     continue;
                 };
+                if !valid_size(w, h) {
+                    continue;
+                }
                 let rotation = parse_next(&mut parts).unwrap_or(0.0);
                 let mut hazard = Hazard::new(x, y, w, h);
 
-                hazard.solid.rotation = rotation;
+                hazard.solid.set_rotation(rotation);
                 hazards.push(hazard);
             }
             Some("checkpoint") => {
@@ -256,6 +295,9 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 let Some(h) = parse_next(&mut parts) else {
                     continue;
                 };
+                if !valid_size(w, h) {
+                    continue;
+                }
 
                 checkpoints.push(Checkpoint::new(x, y, w, h));
             }
@@ -272,6 +314,46 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                     texts.push(LevelText::new(Vec2::new(x, y), text));
                 }
             }
+            Some("world_portal") => {
+                let Some(x) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let Some(y) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let Some(nx) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let Some(ny) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let Some(tx) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let Some(ty) = parse_next(&mut parts) else {
+                    continue;
+                };
+                let width = parse_next(&mut parts)
+                    .filter(|value| *value > 0.0)
+                    .unwrap_or(crate::constants::PORTAL_WIDTH);
+                let id = parse_next_u16(&mut parts).unwrap_or(0);
+                let receiver_id = parse_next_u16(&mut parts).unwrap_or(id);
+                let priority = parse_next_i16(&mut parts).unwrap_or(0);
+
+                world_portals.push(WorldPortal {
+                    portal: Portal::with_tangent(
+                        x,
+                        y,
+                        Vec2::new(nx, ny),
+                        Vec2::new(tx, ty),
+                        width,
+                        Color::rgb(154, 120, 255),
+                    ),
+                    id,
+                    receiver_id,
+                    priority,
+                });
+            }
             _ => {}
         }
     }
@@ -284,11 +366,25 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
         hazards,
         checkpoints,
         texts,
+        world_portals,
         path: Some(path.to_path_buf()),
     })
 }
 
 fn parse_next<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<f32> {
+    // Reject NaN and infinity at the file boundary rather than guarding every consumer.
+    parts
+        .next()?
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn parse_next_u16<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<u16> {
+    parts.next()?.parse().ok()
+}
+
+fn parse_next_i16<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<i16> {
     parts.next()?.parse().ok()
 }
 
@@ -304,5 +400,15 @@ fn slug(name: &str) -> String {
         })
         .collect::<String>();
 
-    slug.trim_matches('_').to_string()
+    let slug = slug.trim_matches('_');
+    // Non-ASCII-only names still need a stable filename on every platform.
+    if slug.is_empty() {
+        "untitled_level".to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+fn valid_size(width: f32, height: f32) -> bool {
+    width > 0.0 && height > 0.0
 }

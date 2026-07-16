@@ -1,5 +1,5 @@
 name Test Chamber 1
-player -64 96
+player -64 64
 solid -160 568 560 32 false 0
 solid -200 -320 48 928 false 0
 solid 24 -312 48 752 false 0
@@ -29,6 +29,10 @@ solid 816 496 80 16 false 0
 solid 944 368 288 16 false 0
 solid 1232 160 96 32 false 0
 solid 1248 320 96 32 false 0
+solid -1280 224 352 16 true 0
+solid -1280 -208 352 16 true 0
+solid -1152 16 432 16 true 1.5707964
+solid -1488 16 432 16 true 1.5707964
 door 104 440 48 128 112 0
 door 1240 184 16 144 112 0
 hazard 432 748 816 40 0

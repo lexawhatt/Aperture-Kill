@@ -22,6 +22,23 @@ impl App {
                 self.debug_gui = !self.debug_gui;
                 true
             }
+            KeyCode::Escape if self.mode == AppMode::Options && self.binding_capture.is_some() => {
+                self.binding_capture = None;
+                true
+            }
+            KeyCode::Escape if self.mode == AppMode::Options && self.resolution_dropdown => {
+                self.resolution_dropdown = false;
+                true
+            }
+            KeyCode::Escape if self.mode == AppMode::Options => {
+                self.mode = AppMode::LevelMenu;
+                true
+            }
+            KeyCode::Escape if self.mode == AppMode::Changelog => {
+                self.mode = AppMode::LevelMenu;
+                true
+            }
+            KeyCode::Escape if self.mode == AppMode::LevelMenu => true,
             KeyCode::Escape if self.mode != AppMode::Playing => {
                 self.mode = AppMode::Playing;
                 self.camera.reset_zoom();
@@ -41,7 +58,10 @@ impl App {
         if self.mode == AppMode::Editor {
             self.camera.reset_zoom();
         }
-        self.mode = if self.mode == AppMode::LevelMenu {
+        self.mode = if matches!(
+            self.mode,
+            AppMode::LevelMenu | AppMode::Changelog | AppMode::Options
+        ) {
             AppMode::Playing
         } else {
             self.input.release_gameplay();

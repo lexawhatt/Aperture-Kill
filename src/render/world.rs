@@ -45,7 +45,7 @@ impl Canvas<'_> {
             panel.pos.y + local_y,
             panel.size.x,
             stripe_h,
-            panel.rotation,
+            panel.rotation(),
             false,
         );
 
@@ -203,7 +203,8 @@ impl Canvas<'_> {
             previous = next;
         }
 
-        let handle_dir = Vec2::new(solid.rotation.sin(), -solid.rotation.cos());
+        let rotation = solid.rotation();
+        let handle_dir = Vec2::new(rotation.sin(), -rotation.cos());
         let handle = center + handle_dir * radius;
         self.draw_world_line(center + handle_dir * (radius - 12.0), handle, color);
         self.fill_world_rect(

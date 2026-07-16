@@ -4,15 +4,21 @@ mod raycast;
 // Level geometry is stored in world space.
 use glam::Vec2;
 
+use crate::game::portal::{Color, Portal};
+
 const RAY_EPSILON: f32 = 0.001;
 const PORTAL_CLEARANCE: f32 = 1.0;
+const DEFAULT_DOOR_RADIUS: f32 = 112.0;
+const DEFAULT_DOOR_SPEED: f32 = 3.6;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Solid {
     pub pos: Vec2,
     pub size: Vec2,
-    pub rotation: f32,
     pub portalable: bool,
+    rotation: f32,
+    axis_x: Vec2,
+    axis_y: Vec2,
 }
 
 impl Solid {
@@ -22,16 +28,39 @@ impl Solid {
             size: Vec2::new(w, h),
             rotation: 0.0,
             portalable,
+            axis_x: Vec2::X,
+            axis_y: Vec2::Y,
         }
     }
 
-    pub const fn rotated(x: f32, y: f32, w: f32, h: f32, rotation: f32, portalable: bool) -> Self {
-        Self {
+    pub fn rotated(x: f32, y: f32, w: f32, h: f32, rotation: f32, portalable: bool) -> Self {
+        let mut solid = Self {
             pos: Vec2::new(x, y),
             size: Vec2::new(w, h),
-            rotation,
+            rotation: 0.0,
             portalable,
-        }
+            axis_x: Vec2::X,
+            axis_y: Vec2::Y,
+        };
+        solid.set_rotation(rotation);
+        solid
+    }
+
+    pub fn set_rotation(&mut self, rotation: f32) {
+        let rotation = if rotation.is_finite() { rotation } else { 0.0 };
+
+        self.rotation = rotation;
+        let (sin, cos) = rotation.sin_cos();
+        self.axis_x = Vec2::new(cos, sin);
+        self.axis_y = Vec2::new(-sin, cos);
+    }
+
+    pub fn rotation(self) -> f32 {
+        self.rotation
+    }
+
+    pub fn basis(self) -> (Vec2, Vec2) {
+        (self.axis_x, self.axis_y)
     }
 
     pub fn center(self) -> Vec2 {
@@ -39,26 +68,28 @@ impl Solid {
     }
 
     pub fn axis_x(self) -> Vec2 {
-        Vec2::new(self.rotation.cos(), self.rotation.sin())
+        self.axis_x
     }
 
     pub fn axis_y(self) -> Vec2 {
-        Vec2::new(-self.rotation.sin(), self.rotation.cos())
+        self.axis_y
     }
 
     pub fn local_from_world(self, point: Vec2) -> Vec2 {
+        let (axis_x, axis_y) = self.basis();
         let offset = point - self.center();
 
         Vec2::new(
-            offset.dot(self.axis_x()) + self.size.x / 2.0,
-            offset.dot(self.axis_y()) + self.size.y / 2.0,
+            offset.dot(axis_x) + self.size.x / 2.0,
+            offset.dot(axis_y) + self.size.y / 2.0,
         )
     }
 
     pub fn world_from_local(self, point: Vec2) -> Vec2 {
+        let (axis_x, axis_y) = self.basis();
         let offset = point - self.size / 2.0;
 
-        self.center() + self.axis_x() * offset.x + self.axis_y() * offset.y
+        self.center() + axis_x * offset.x + axis_y * offset.y
     }
 
     pub fn contains_point(self, point: Vec2) -> bool {
@@ -77,14 +108,15 @@ impl Solid {
     }
 
     pub fn overlaps_aabb(self, center: Vec2, half_size: Vec2) -> bool {
-        let axes = [Vec2::X, Vec2::Y, self.axis_x(), self.axis_y()];
+        let solid_center = self.center();
+        let (axis_x, axis_y) = self.basis();
+        let axes = [Vec2::X, Vec2::Y, axis_x, axis_y];
 
         axes.into_iter().all(|axis| {
             let player_extent = half_size.x * axis.x.abs() + half_size.y * axis.y.abs();
-            let solid_axis =
-                Vec2::new(axis.dot(self.axis_x()).abs(), axis.dot(self.axis_y()).abs());
+            let solid_axis = Vec2::new(axis.dot(axis_x).abs(), axis.dot(axis_y).abs());
             let solid_extent = self.size.x / 2.0 * solid_axis.x + self.size.y / 2.0 * solid_axis.y;
-            let delta = center.dot(axis) - self.center().dot(axis);
+            let delta = center.dot(axis) - solid_center.dot(axis);
 
             player_extent + solid_extent - delta.abs() > 0.0
         })
@@ -95,6 +127,8 @@ impl Solid {
 pub struct Door {
     pub solid: Solid,
     pub trigger_radius: f32,
+    pub speed: f32,
+    pub automatic: bool,
     pub open: f32,
     triggered: bool,
 }
@@ -103,7 +137,9 @@ impl Door {
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self {
             solid: Solid::new(x, y, w, h, false),
-            trigger_radius: 112.0,
+            trigger_radius: DEFAULT_DOOR_RADIUS,
+            speed: DEFAULT_DOOR_SPEED,
+            automatic: true,
             open: 0.0,
             triggered: false,
         }
@@ -112,18 +148,29 @@ impl Door {
     pub fn with_radius(x: f32, y: f32, w: f32, h: f32, trigger_radius: f32) -> Self {
         Self {
             solid: Solid::new(x, y, w, h, false),
-            trigger_radius,
+            trigger_radius: positive_or(trigger_radius, DEFAULT_DOOR_RADIUS),
+            speed: DEFAULT_DOOR_SPEED,
+            automatic: true,
             open: 0.0,
             triggered: false,
         }
     }
 
-    pub fn update(&mut self, player_pos: Vec2, dt: f32) -> Vec<DoorEvent> {
-        let triggered = player_pos.distance(self.solid.center()) <= self.trigger_radius;
-        let mut events = Vec::new();
+    pub fn update(&mut self, player_pos: Vec2, dt: f32, mut emit: impl FnMut(DoorEvent)) {
+        // Editor data can be malformed; repair it before it reaches movement or rendering.
+        self.trigger_radius = positive_or(self.trigger_radius, DEFAULT_DOOR_RADIUS);
+        self.speed = positive_or(self.speed, DEFAULT_DOOR_SPEED);
+        if !self.open.is_finite() {
+            self.open = 0.0;
+        }
+        self.open = self.open.clamp(0.0, 1.0);
+
+        let triggered = self.automatic
+            && player_pos.is_finite()
+            && player_pos.distance(self.solid.center()) <= self.trigger_radius;
 
         if triggered != self.triggered {
-            events.push(if triggered {
+            emit(if triggered {
                 DoorEvent::Opening
             } else {
                 DoorEvent::Closing
@@ -132,7 +179,8 @@ impl Door {
 
         self.triggered = triggered;
         let target = if triggered { 1.0 } else { 0.0 };
-        let speed = 3.6 * dt;
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let speed = self.speed * dt;
         let was_open = self.open;
 
         if self.open < target {
@@ -143,25 +191,29 @@ impl Door {
 
         if was_open != self.open {
             if triggered && self.open == 1.0 {
-                events.push(DoorEvent::Opened);
+                emit(DoorEvent::Opened);
             } else if !triggered && self.open == 0.0 {
-                events.push(DoorEvent::Closed);
+                emit(DoorEvent::Closed);
             }
         }
-
-        events
     }
 
     pub fn moving_solid(self) -> Solid {
         let mut solid = self.solid;
-        let slide = solid.axis_y() * -(solid.size.y + 8.0) * self.open;
+        let open = if self.open.is_finite() {
+            self.open
+        } else {
+            0.0
+        }
+        .clamp(0.0, 1.0);
+        let slide = solid.axis_y() * -(solid.size.y + 8.0) * open;
 
         solid.pos += slide;
         solid
     }
 
     pub fn blocks_player(self) -> bool {
-        self.open < 0.92
+        !self.open.is_finite() || self.open < 0.92
     }
 }
 
@@ -185,6 +237,33 @@ impl LevelText {
             pos,
             text: text.into(),
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct WorldPortal {
+    pub portal: Portal,
+    pub id: u16,
+    pub receiver_id: u16,
+    pub priority: i16,
+}
+
+impl WorldPortal {
+    pub fn new(x: f32, y: f32, normal: Vec2, width: f32, id: u16) -> Self {
+        Self {
+            portal: Portal::new(x, y, normal, width, Color::rgb(154, 120, 255)),
+            id,
+            receiver_id: id,
+            priority: 0,
+        }
+    }
+
+    pub fn center(self) -> Vec2 {
+        self.portal.pos
+    }
+
+    pub fn set_center(&mut self, center: Vec2) {
+        self.portal.pos = center;
     }
 }
 
@@ -229,6 +308,7 @@ pub struct Level {
     pub hazards: Vec<Hazard>,
     pub checkpoints: Vec<Checkpoint>,
     pub texts: Vec<LevelText>,
+    pub world_portals: Vec<WorldPortal>,
 }
 
 #[derive(Clone, Copy)]
@@ -246,16 +326,27 @@ pub struct RayHit {
 
 impl RayHit {
     pub fn portal_center(self, portal_width: f32) -> Option<Vec2> {
-        if self.surface_span < portal_width {
+        // Invalid spans used to reach f32::clamp with inverted bounds and panic.
+        if !portal_width.is_finite()
+            || portal_width <= 0.0
+            || !self.surface_span.is_finite()
+            || !self.surface_min.is_finite()
+            || !self.surface_max.is_finite()
+            || self.surface_max < self.surface_min
+            || self.surface_span < portal_width
+        {
             return None;
         }
 
         let mut center = self.point;
         let half_width = portal_width / 2.0;
+        let min_center = self.surface_min + half_width;
+        let max_center = self.surface_max - half_width;
+        if min_center > max_center {
+            return None;
+        }
         // Clamp along the surface, not away from it.
-        let clamped = self
-            .surface_coord
-            .clamp(self.surface_min + half_width, self.surface_max - half_width);
+        let clamped = self.surface_coord.clamp(min_center, max_center);
         center += self.tangent * (clamped - self.surface_coord);
 
         Some(center)
@@ -263,6 +354,7 @@ impl RayHit {
 }
 
 impl Level {
+    #[cfg(test)]
     pub fn empty() -> Self {
         Self {
             solids: Vec::new(),
@@ -270,6 +362,7 @@ impl Level {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             texts: Vec::new(),
+            world_portals: Vec::new(),
         }
     }
 
@@ -290,20 +383,49 @@ impl Level {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             texts: Vec::new(),
+            world_portals: Vec::new(),
         }
     }
 
-    pub fn update_doors(&mut self, player_pos: Vec2, dt: f32) -> Vec<(usize, DoorEvent)> {
-        let mut events = Vec::new();
-
+    pub fn update_doors(
+        &mut self,
+        player_pos: Vec2,
+        dt: f32,
+        events: &mut Vec<(usize, DoorEvent)>,
+    ) {
         for (index, door) in self.doors.iter_mut().enumerate() {
-            events.extend(
-                door.update(player_pos, dt)
-                    .into_iter()
-                    .map(|event| (index, event)),
-            );
+            door.update(player_pos, dt, |event| events.push((index, event)));
         }
+    }
+}
 
-        events
+fn positive_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ray_hit_rejects_invalid_portal_width_without_clamping() {
+        let hit = RayHit {
+            point: Vec2::ZERO,
+            normal: Vec2::Y,
+            tangent: Vec2::X,
+            solid_index: 0,
+            surface_coord: 16.0,
+            surface_min: 0.0,
+            surface_max: 32.0,
+            surface_span: 32.0,
+        };
+
+        assert_eq!(hit.portal_center(0.0), None);
+        assert_eq!(hit.portal_center(f32::NAN), None);
+        assert_eq!(hit.portal_center(64.0), None);
     }
 }

@@ -44,6 +44,7 @@ pub(super) enum EditorSelection {
     Hazard(usize),
     Checkpoint(usize),
     Text(usize),
+    WorldPortal(usize),
 }
 
 #[derive(Clone)]
@@ -67,7 +68,7 @@ pub(super) fn drag_from_hit(hit: SolidHit, pos: Vec2, solid: Solid) -> EditorDra
             let center = solid.center();
 
             EditorDrag::Rotate {
-                start_rotation: solid.rotation,
+                start_rotation: solid.rotation(),
                 center,
                 start_angle: (pos - center).to_angle(),
             }
@@ -221,7 +222,8 @@ fn rotate_hit(pos: Vec2, solid: Solid) -> bool {
     let center = solid.center();
     let radius = solid.size.x.max(solid.size.y) / 2.0 + ROTATE_RING_OFFSET;
     let distance = pos.distance(center);
-    let handle_dir = Vec2::new(solid.rotation.sin(), -solid.rotation.cos());
+    let rotation = solid.rotation();
+    let handle_dir = Vec2::new(rotation.sin(), -rotation.cos());
     let handle = center + handle_dir * radius;
 
     (distance - radius).abs() <= ROTATE_HIT_SIZE || pos.distance(handle) <= ROTATE_HIT_SIZE

@@ -1,7 +1,9 @@
 use glam::Vec2;
 
 // Collision resolves real solids, but active portals can open a wall.
+use crate::constants::CLIMBSTEP_HEIGHT;
 use crate::constants::PORTAL_SURFACE_OFFSET;
+use crate::game::geometry::projected_extent;
 use crate::game::player::Player;
 use crate::game::portal::Portal;
 
@@ -16,15 +18,19 @@ impl Level {
         let was_on_ground = player.on_ground;
         player.clear_contacts();
 
-        for solid in &self.solids {
-            if let Some(correction) = body_solid_overlap(player.pos, player.half_size(), *solid) {
+        for solid in self.solids.iter().copied() {
+            if let Some(correction) = body_solid_overlap(player.pos, player.half_size(), solid) {
                 if portal_opens_collision(
                     player.pos,
                     player.half_size(),
                     correction,
-                    *solid,
+                    solid,
                     portals,
                 ) {
+                    continue;
+                }
+
+                if self.try_climb_step(player, solid, correction, was_on_ground, portals) {
                     continue;
                 }
 
@@ -42,6 +48,70 @@ impl Level {
                 resolve_body_push(player, correction, was_on_ground);
             }
         }
+
+        self.try_uncrouch_player(player, portals);
+    }
+
+    fn try_climb_step(
+        &self,
+        player: &mut Player,
+        solid: Solid,
+        correction: Vec2,
+        was_on_ground: bool,
+        portals: &[Portal],
+    ) -> bool {
+        if !was_on_ground {
+            return false;
+        }
+        if correction.x.abs() <= correction.y.abs() || solid.rotation().abs() > RAY_EPSILON {
+            return false;
+        }
+
+        let normal = correction.normalize_or_zero();
+        if player.vel.dot(normal) >= 0.0 {
+            return false;
+        }
+
+        let bottom = player.pos.y + player.half_size().y;
+        let step = bottom - solid.pos.y;
+        if !(0.0..=CLIMBSTEP_HEIGHT).contains(&step) {
+            return false;
+        }
+
+        let candidate = player.pos - Vec2::Y * (step + RAY_EPSILON);
+        if self.body_blocked(candidate, player.half_size(), portals) {
+            return false;
+        }
+
+        player.pos = candidate;
+        player.touch_ground();
+        true
+    }
+
+    fn try_uncrouch_player(&self, player: &mut Player, portals: &[Portal]) {
+        let Some((center, half_size)) = player.standing_body() else {
+            return;
+        };
+
+        if !self.body_blocked(center, half_size, portals) {
+            player.stand_up();
+        }
+    }
+
+    fn body_blocked(&self, center: Vec2, half_size: Vec2, portals: &[Portal]) -> bool {
+        for solid in self.solids.iter().copied() {
+            let Some(correction) = body_solid_overlap(center, half_size, solid) else {
+                continue;
+            };
+            if !portal_opens_collision(center, half_size, correction, solid, portals) {
+                return true;
+            }
+        }
+
+        self.doors.iter().any(|door| {
+            door.blocks_player()
+                && body_solid_overlap(center, half_size, door.moving_solid()).is_some()
+        })
     }
 }
 
@@ -49,6 +119,7 @@ fn resolve_body_push(player: &mut Player, correction: Vec2, was_on_ground: bool)
     player.pos += correction;
     let normal = correction.normalize_or_zero();
     let into_surface = player.vel.dot(normal);
+    let incoming_speed = player.vel.dot(-normal);
     let ground_contact = normal.y < -0.55;
     let down_speed = if ground_contact {
         player.vel.y.max(0.0)
@@ -61,8 +132,8 @@ fn resolve_body_push(player: &mut Player, correction: Vec2, was_on_ground: bool)
     }
     if ground_contact {
         player.touch_ground_contact(down_speed, !was_on_ground);
-    } else if normal.x.abs() > 0.55 {
-        player.set_wall_contact(-normal.x.signum());
+    } else if normal.x.abs() > 0.55 && !player.try_wall_slam(normal) {
+        player.set_wall_contact_with_speed(-normal.x.signum(), incoming_speed);
     }
 }
 
@@ -107,20 +178,24 @@ fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
 }
 
 fn body_solid_overlap(center: Vec2, half_size: Vec2, solid: Solid) -> Option<Vec2> {
-    let axes = [Vec2::X, Vec2::Y, solid.axis_x(), solid.axis_y()];
+    let solid_center = solid.center();
+    let (axis_x, axis_y) = solid.basis();
+    let axes = [Vec2::X, Vec2::Y, axis_x, axis_y];
     let mut smallest_overlap = f32::INFINITY;
     let mut correction_axis = Vec2::ZERO;
 
     for axis in axes {
         let player_extent = projected_extent(half_size, axis);
-        let solid_extent = projected_extent(solid.size / 2.0, axis_from_solid(axis, solid));
-        let delta = center.dot(axis) - solid.center().dot(axis);
+        let solid_extent =
+            projected_extent(solid.size / 2.0, axis_from_solid(axis, axis_x, axis_y));
+        let delta = center.dot(axis) - solid_center.dot(axis);
         let overlap = player_extent + solid_extent - delta.abs();
 
         if overlap <= 0.0 {
             return None;
         }
 
+        // The minimum separating axis is the shortest correction that fully clears the overlap.
         if overlap < smallest_overlap {
             smallest_overlap = overlap;
             let direction = if delta >= 0.0 { 1.0 } else { -1.0 };
@@ -131,13 +206,6 @@ fn body_solid_overlap(center: Vec2, half_size: Vec2, solid: Solid) -> Option<Vec
     Some(correction_axis * smallest_overlap)
 }
 
-fn axis_from_solid(axis: Vec2, solid: Solid) -> Vec2 {
-    Vec2::new(
-        axis.dot(solid.axis_x()).abs(),
-        axis.dot(solid.axis_y()).abs(),
-    )
-}
-
-fn projected_extent(half_size: Vec2, axis: Vec2) -> f32 {
-    half_size.x * axis.x.abs() + half_size.y * axis.y.abs()
+fn axis_from_solid(axis: Vec2, solid_axis_x: Vec2, solid_axis_y: Vec2) -> Vec2 {
+    Vec2::new(axis.dot(solid_axis_x).abs(), axis.dot(solid_axis_y).abs())
 }

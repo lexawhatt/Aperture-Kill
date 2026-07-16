@@ -3,6 +3,7 @@ mod constants;
 mod game;
 mod platform;
 mod render;
+mod settings;
 
 use std::error::Error;
 

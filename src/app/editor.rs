@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
+
 use glam::Vec2;
 use winit::keyboard::KeyCode;
 
 // Editor stores mode state and applies commands to level objects.
-use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid};
+use crate::constants::PORTAL_WIDTH;
+use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
 
 use super::editor_geometry::{
     EditorDrag, EditorMoveStart, EditorSelection, SolidHit, drag_from_hit, rect_intersects_rect,
@@ -21,7 +24,7 @@ pub(super) struct Editor {
     pub(super) status_timer: f32,
     grid_snap: bool,
     text_editing: bool,
-    undo: Vec<LevelSnapshot>,
+    undo: VecDeque<LevelSnapshot>,
 }
 
 impl Editor {
@@ -37,7 +40,7 @@ impl Editor {
             status_timer: 0.0,
             grid_snap: true,
             text_editing: false,
-            undo: Vec::new(),
+            undo: VecDeque::new(),
         }
     }
 
@@ -169,6 +172,42 @@ impl Editor {
         self.dirty = true;
     }
 
+    pub(super) fn create_world_portal(&mut self, pos: Vec2, level: &mut Level) {
+        self.save_undo(level);
+        let center = maybe_snap(pos, self.grid_snap);
+
+        level.world_portals.push(WorldPortal::new(
+            center.x,
+            center.y,
+            Vec2::new(0.0, -1.0),
+            PORTAL_WIDTH,
+            0,
+        ));
+        self.set_single_selection(EditorSelection::WorldPortal(level.world_portals.len() - 1));
+        self.text_editing = false;
+        self.dirty = true;
+    }
+
+    pub(super) fn create_active_tool(&mut self, pos: Vec2, level: &mut Level) {
+        match self.tool {
+            EditorTool::Solid | EditorTool::Portalable => self.create_block(pos, self.tool, level),
+            EditorTool::Door => self.create_door(pos, level),
+            EditorTool::Text => self.create_text(pos, level),
+            EditorTool::Hazard => self.create_hazard(pos, level),
+            EditorTool::Checkpoint => self.create_checkpoint(pos, level),
+            EditorTool::WorldPortal => self.create_world_portal(pos, level),
+        }
+    }
+
+    pub(super) fn set_tool(&mut self, tool: EditorTool) {
+        self.tool = tool;
+        self.text_editing = false;
+    }
+
+    pub(super) fn has_object_at(&self, pos: Vec2, level: &Level) -> bool {
+        self.object_at(pos, level).is_some()
+    }
+
     pub(super) fn drag_to(&mut self, pos: Vec2, level: &mut Level) {
         let primary = self.primary_selected();
         let grid_snap = self.grid_snap;
@@ -266,6 +305,10 @@ impl Editor {
         self.drag = EditorDrag::None;
     }
 
+    pub(super) fn cancel_drag(&mut self) {
+        self.drag = EditorDrag::None;
+    }
+
     pub(super) fn delete_selected(&mut self, level: &mut Level) {
         if self.selected.is_empty() {
             return;
@@ -277,6 +320,7 @@ impl Editor {
         let mut hazards = Vec::new();
         let mut checkpoints = Vec::new();
         let mut texts = Vec::new();
+        let mut world_portals = Vec::new();
 
         for selection in self.valid_selected(level) {
             match selection {
@@ -285,6 +329,7 @@ impl Editor {
                 EditorSelection::Hazard(index) => hazards.push(index),
                 EditorSelection::Checkpoint(index) => checkpoints.push(index),
                 EditorSelection::Text(index) => texts.push(index),
+                EditorSelection::WorldPortal(index) => world_portals.push(index),
             }
         }
 
@@ -293,6 +338,7 @@ impl Editor {
         remove_indices(&mut level.hazards, hazards);
         remove_indices(&mut level.checkpoints, checkpoints);
         remove_indices(&mut level.texts, texts);
+        remove_indices(&mut level.world_portals, world_portals);
         self.clear_selection();
         self.dirty = true;
     }
@@ -321,6 +367,11 @@ impl Editor {
                 EditorSelection::Text(index) => {
                     level.texts.get(index).cloned().map(EditorClipboard::Text)
                 }
+                EditorSelection::WorldPortal(index) => level
+                    .world_portals
+                    .get(index)
+                    .copied()
+                    .map(EditorClipboard::WorldPortal),
             })
             .collect();
     }
@@ -368,6 +419,11 @@ impl Editor {
                     level.texts.push(text);
                     pasted.push(EditorSelection::Text(level.texts.len() - 1));
                 }
+                EditorClipboard::WorldPortal(mut portal) => {
+                    portal.portal.pos += offset;
+                    level.world_portals.push(portal);
+                    pasted.push(EditorSelection::WorldPortal(level.world_portals.len() - 1));
+                }
             }
         }
 
@@ -382,7 +438,8 @@ impl Editor {
     }
 
     pub(super) fn undo(&mut self, level: &mut Level) {
-        let Some(previous) = self.undo.pop() else {
+        // Snapshots contain only level data; camera, tool, and transient drag state stay intact.
+        let Some(previous) = self.undo.pop_back() else {
             return;
         };
 
@@ -391,6 +448,7 @@ impl Editor {
         level.hazards = previous.hazards;
         level.checkpoints = previous.checkpoints;
         level.texts = previous.texts;
+        level.world_portals = previous.world_portals;
         self.normalize_selection(level);
         self.text_editing = false;
         self.dirty = true;
@@ -458,6 +516,7 @@ impl Editor {
             .chain((0..level.hazards.len()).map(EditorSelection::Hazard))
             .chain((0..level.checkpoints.len()).map(EditorSelection::Checkpoint))
             .chain((0..level.texts.len()).map(EditorSelection::Text))
+            .chain((0..level.world_portals.len()).map(EditorSelection::WorldPortal))
             .collect();
         self.text_editing = false;
     }
@@ -468,6 +527,93 @@ impl Editor {
         }
 
         self.text_editing = !self.text_editing;
+        true
+    }
+
+    pub(super) fn adjust_selected_world_portal(
+        &mut self,
+        level: &mut Level,
+        id_delta: i16,
+        receiver_delta: i16,
+        priority_delta: i16,
+    ) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.id = offset_u16(portal.id, id_delta);
+        portal.receiver_id = offset_u16(portal.receiver_id, receiver_delta);
+        portal.priority = portal.priority.saturating_add(priority_delta);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn toggle_selected_door_automatic(&mut self, level: &mut Level) -> bool {
+        let Some(EditorSelection::Door(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(door) = level.doors.get_mut(index) else {
+            return false;
+        };
+
+        door.automatic = !door.automatic;
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_door_radius(&mut self, level: &mut Level, delta: f32) -> bool {
+        let Some(EditorSelection::Door(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(door) = level.doors.get_mut(index) else {
+            return false;
+        };
+
+        door.trigger_radius = (door.trigger_radius + delta).clamp(16.0, 2048.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_door_speed(&mut self, level: &mut Level, delta: f32) -> bool {
+        let Some(EditorSelection::Door(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(door) = level.doors.get_mut(index) else {
+            return false;
+        };
+
+        door.speed = (door.speed + delta).clamp(0.2, 12.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_world_portal_width(
+        &mut self,
+        level: &mut Level,
+        delta: f32,
+    ) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.portal.width = (portal.portal.width + delta).clamp(24.0, 512.0);
+        self.dirty = true;
         true
     }
 
@@ -573,8 +719,44 @@ impl Editor {
             .collect()
     }
 
+    pub(super) fn selected_world_portals(&self) -> Vec<usize> {
+        self.selected
+            .iter()
+            .filter_map(|selection| match selection {
+                EditorSelection::WorldPortal(index) => Some(*index),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(super) fn selection_count(&self) -> usize {
         self.selected.len()
+    }
+
+    pub(super) fn primary_selection_kind(&self) -> EditorSelectionKind {
+        match self.primary_selected() {
+            Some(EditorSelection::Solid(_)) => EditorSelectionKind::Solid,
+            Some(EditorSelection::Door(_)) => EditorSelectionKind::Door,
+            Some(EditorSelection::Hazard(_)) => EditorSelectionKind::Hazard,
+            Some(EditorSelection::Checkpoint(_)) => EditorSelectionKind::Checkpoint,
+            Some(EditorSelection::Text(_)) => EditorSelectionKind::Text,
+            Some(EditorSelection::WorldPortal(_)) => EditorSelectionKind::WorldPortal,
+            None => EditorSelectionKind::None,
+        }
+    }
+
+    pub(super) fn primary_door_index(&self) -> Option<usize> {
+        match self.primary_selected()? {
+            EditorSelection::Door(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn primary_world_portal_index(&self) -> Option<usize> {
+        match self.primary_selected()? {
+            EditorSelection::WorldPortal(index) => Some(index),
+            _ => None,
+        }
     }
 
     pub(super) fn text_editing(&self) -> bool {
@@ -636,6 +818,16 @@ impl Editor {
             .find(|(_, text)| text_at(pos, text))
         {
             return Some((EditorSelection::Text(index), SolidHit::Body));
+        }
+
+        if let Some((index, _)) = level
+            .world_portals
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, portal)| world_portal_at(pos, **portal))
+        {
+            return Some((EditorSelection::WorldPortal(index), SolidHit::Body));
         }
 
         if let Some((index, hit)) = level
@@ -724,6 +916,14 @@ impl Editor {
                     }
                 })
                 .unwrap_or(EditorDrag::None),
+            EditorSelection::WorldPortal(index) => level
+                .world_portals
+                .get(index)
+                .copied()
+                .map(|portal| EditorDrag::Move {
+                    grab: pos - portal.center(),
+                })
+                .unwrap_or(EditorDrag::None),
         }
     }
 
@@ -767,12 +967,23 @@ impl Editor {
             rect_intersects_rect(rect_pos, rect_size, text_pos, text_size)
                 .then_some(EditorSelection::Text(index))
         });
+        let world_portals = level
+            .world_portals
+            .iter()
+            .enumerate()
+            .filter_map(|(index, portal)| {
+                let (min, max) = world_portal_bounds(*portal);
+
+                rect_intersects_rect(rect_pos, rect_size, min, max - min)
+                    .then_some(EditorSelection::WorldPortal(index))
+            });
 
         solids
             .chain(doors)
             .chain(hazards)
             .chain(checkpoints)
             .chain(texts)
+            .chain(world_portals)
             .collect()
     }
 
@@ -849,6 +1060,7 @@ impl Editor {
                 EditorSelection::Hazard(index) => *index < level.hazards.len(),
                 EditorSelection::Checkpoint(index) => *index < level.checkpoints.len(),
                 EditorSelection::Text(index) => *index < level.texts.len(),
+                EditorSelection::WorldPortal(index) => *index < level.world_portals.len(),
             })
             .collect::<Vec<_>>();
 
@@ -869,16 +1081,18 @@ impl Editor {
             hazards: level.hazards.clone(),
             checkpoints: level.checkpoints.clone(),
             texts: level.texts.clone(),
+            world_portals: level.world_portals.clone(),
         };
 
-        if self.undo.last().is_some_and(|last| *last == snapshot) {
+        if self.undo.back().is_some_and(|last| *last == snapshot) {
             return;
         }
+        // Keep history bounded by content, not by editing session length.
         if self.undo.len() == UNDO_LIMIT {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
 
-        self.undo.push(snapshot);
+        self.undo.push_back(snapshot);
     }
 
     fn object_pos(level: &Level, selection: EditorSelection) -> Option<Vec2> {
@@ -893,6 +1107,9 @@ impl Editor {
                 .get(index)
                 .map(|checkpoint| checkpoint.solid.pos),
             EditorSelection::Text(index) => level.texts.get(index).map(|text| text.pos),
+            EditorSelection::WorldPortal(index) => {
+                level.world_portals.get(index).map(|portal| portal.center())
+            }
         }
     }
 
@@ -923,6 +1140,11 @@ impl Editor {
             EditorSelection::Text(index) => {
                 if let Some(text) = level.texts.get_mut(index) {
                     text.pos = pos;
+                }
+            }
+            EditorSelection::WorldPortal(index) => {
+                if let Some(portal) = level.world_portals.get_mut(index) {
+                    portal.set_center(pos);
                 }
             }
         }
@@ -962,6 +1184,11 @@ impl Editor {
                     text.pos = maybe_snap(center - size / 2.0, grid_snap);
                 }
             }
+            EditorSelection::WorldPortal(index) => {
+                if let Some(portal) = level.world_portals.get_mut(index) {
+                    portal.set_center(maybe_snap(center, grid_snap));
+                }
+            }
         }
     }
 
@@ -976,7 +1203,7 @@ impl Editor {
                 .checkpoints
                 .get_mut(index)
                 .map(|checkpoint| &mut checkpoint.solid),
-            EditorSelection::Text(_) => None,
+            EditorSelection::Text(_) | EditorSelection::WorldPortal(_) => None,
         }
     }
 
@@ -989,7 +1216,10 @@ impl Editor {
         grid_snap: bool,
     ) {
         let angle = (pos - center).to_angle();
-        solid.rotation = maybe_snap_angle(start_rotation + angle - start_angle, grid_snap);
+        solid.set_rotation(maybe_snap_angle(
+            start_rotation + angle - start_angle,
+            grid_snap,
+        ));
     }
 
     fn resize_solid(
@@ -1012,7 +1242,7 @@ impl Editor {
 
         solid.size = max - min;
         solid.pos = center - solid.size / 2.0;
-        solid.rotation = start.rotation;
+        solid.set_rotation(start.rotation());
     }
 }
 
@@ -1039,6 +1269,7 @@ struct LevelSnapshot {
     hazards: Vec<Hazard>,
     checkpoints: Vec<Checkpoint>,
     texts: Vec<LevelText>,
+    world_portals: Vec<WorldPortal>,
 }
 
 #[derive(Clone)]
@@ -1048,6 +1279,7 @@ enum EditorClipboard {
     Hazard(Hazard),
     Checkpoint(Checkpoint),
     Text(LevelText),
+    WorldPortal(WorldPortal),
 }
 
 #[derive(Default)]
@@ -1062,6 +1294,11 @@ struct EditorPan {
 pub(super) enum EditorTool {
     Solid,
     Portalable,
+    Door,
+    Text,
+    Hazard,
+    Checkpoint,
+    WorldPortal,
 }
 
 impl EditorTool {
@@ -1073,6 +1310,61 @@ impl EditorTool {
         match self {
             Self::Solid => 1,
             Self::Portalable => 2,
+            Self::Door => 3,
+            Self::Text => 4,
+            Self::Hazard => 5,
+            Self::Checkpoint => 6,
+            Self::WorldPortal => 7,
+        }
+    }
+
+    pub(super) fn from_index(index: usize) -> Option<Self> {
+        match index {
+            1 => Some(Self::Solid),
+            2 => Some(Self::Portalable),
+            3 => Some(Self::Door),
+            4 => Some(Self::Text),
+            5 => Some(Self::Hazard),
+            6 => Some(Self::Checkpoint),
+            7 => Some(Self::WorldPortal),
+            _ => None,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Solid => "SOLID",
+            Self::Portalable => "PORTAL",
+            Self::Door => "DOOR",
+            Self::Text => "TEXT",
+            Self::Hazard => "ACID",
+            Self::Checkpoint => "CHECK",
+            Self::WorldPortal => "W PORT",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum EditorSelectionKind {
+    None,
+    Solid,
+    Door,
+    Hazard,
+    Checkpoint,
+    Text,
+    WorldPortal,
+}
+
+impl EditorSelectionKind {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Solid => "SOLID",
+            Self::Door => "DOOR",
+            Self::Hazard => "ACID",
+            Self::Checkpoint => "CHECKPOINT",
+            Self::Text => "TEXT",
+            Self::WorldPortal => "WORLD PORTAL",
         }
     }
 }
@@ -1092,6 +1384,7 @@ fn selection_sort_key(selection: &EditorSelection) -> (usize, usize) {
         EditorSelection::Hazard(index) => (2, *index),
         EditorSelection::Checkpoint(index) => (3, *index),
         EditorSelection::Text(index) => (4, *index),
+        EditorSelection::WorldPortal(index) => (5, *index),
     }
 }
 
@@ -1128,6 +1421,13 @@ fn selection_bounds(level: &Level, selected: &[EditorSelection]) -> (Vec2, Vec2)
                     max = max.max(pos + size);
                 }
             }
+            EditorSelection::WorldPortal(index) => {
+                if let Some(portal) = level.world_portals.get(index) {
+                    let (portal_min, portal_max) = world_portal_bounds(*portal);
+                    min = min.min(portal_min);
+                    max = max.max(portal_max);
+                }
+            }
         }
     }
 
@@ -1138,6 +1438,35 @@ fn include_solid_bounds(solid: Solid, min: &mut Vec2, max: &mut Vec2) {
     for corner in solid.corners() {
         *min = min.min(corner);
         *max = max.max(corner);
+    }
+}
+
+fn world_portal_at(pos: Vec2, portal: WorldPortal) -> bool {
+    let (a, b) = portal.portal.endpoints();
+    distance_to_segment(pos, a, b) <= 10.0
+}
+
+fn world_portal_bounds(portal: WorldPortal) -> (Vec2, Vec2) {
+    let (a, b) = portal.portal.endpoints();
+    let min = a.min(b) - Vec2::splat(10.0);
+    let max = a.max(b) + Vec2::splat(10.0);
+
+    (min, max)
+}
+
+fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let t = (point - a).dot(ab) / ab.length_squared().max(1.0);
+    let closest = a + ab * t.clamp(0.0, 1.0);
+
+    point.distance(closest)
+}
+
+fn offset_u16(value: u16, delta: i16) -> u16 {
+    if delta.is_negative() {
+        value.saturating_sub(delta.unsigned_abs())
+    } else {
+        value.saturating_add(delta as u16)
     }
 }
 
@@ -1159,6 +1488,11 @@ fn clipboard_bounds(clipboard: &[EditorClipboard]) -> (Vec2, Vec2) {
                 let (pos, size) = text_bounds(text);
                 min = min.min(pos);
                 max = max.max(pos + size);
+            }
+            EditorClipboard::WorldPortal(portal) => {
+                let (portal_min, portal_max) = world_portal_bounds(*portal);
+                min = min.min(portal_min);
+                max = max.max(portal_max);
             }
         }
     }

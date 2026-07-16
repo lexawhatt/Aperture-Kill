@@ -16,6 +16,7 @@ const DASH: &[u8] = include_bytes!("../../assets/sounds/dash.wav");
 const SLIDE: &[u8] = include_bytes!("../../assets/sounds/slide.wav");
 const GROUND_SLAM: &[u8] = include_bytes!("../../assets/sounds/ground_slam.wav");
 const LAND_HEAVY: &[u8] = include_bytes!("../../assets/sounds/land_heavy.wav");
+const MENU_MUSIC: &[u8] = include_bytes!("../../assets/sounds/menu_the_fire_is_gone.wav");
 const PORTAL_FIRE: &[u8] = include_bytes!("../../assets/sounds/portal_fire.wav");
 const PORTAL_PLACE: &[u8] = include_bytes!("../../assets/sounds/portal_place.wav");
 
@@ -25,7 +26,12 @@ pub(super) struct Audio {
     dash: Option<Sink>,
     slide: Option<Sink>,
     ground_slam: Option<Sink>,
+    menu_music: Option<Sink>,
+    menu_falling: Option<Sink>,
     doors: HashMap<usize, Sink>,
+    master_volume: f32,
+    sfx_volume: f32,
+    music_volume: f32,
 }
 
 impl Audio {
@@ -37,7 +43,12 @@ impl Audio {
                 dash: None,
                 slide: None,
                 ground_slam: None,
+                menu_music: None,
+                menu_falling: None,
                 doors: HashMap::new(),
+                master_volume: 1.0,
+                sfx_volume: 1.0,
+                music_volume: 1.0,
             },
             Err(err) => {
                 eprintln!(
@@ -54,9 +65,39 @@ impl Audio {
                     dash: None,
                     slide: None,
                     ground_slam: None,
+                    menu_music: None,
+                    menu_falling: None,
                     doors: HashMap::new(),
+                    master_volume: 1.0,
+                    sfx_volume: 1.0,
+                    music_volume: 1.0,
                 }
             }
+        }
+    }
+
+    pub(super) fn set_volumes(&mut self, master: u8, sfx: u8, music: u8) {
+        self.master_volume = volume_factor(master);
+        self.sfx_volume = volume_factor(sfx);
+        self.music_volume = volume_factor(music);
+
+        let sfx_volume = self.sfx_sink_volume();
+        for sink in [
+            self.dash.as_ref(),
+            self.slide.as_ref(),
+            self.ground_slam.as_ref(),
+            self.menu_falling.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            sink.set_volume(sfx_volume);
+        }
+        for sink in self.doors.values() {
+            sink.set_volume(sfx_volume);
+        }
+        if let Some(sink) = self.menu_music.as_ref() {
+            sink.set_volume(self.music_sink_volume());
         }
     }
 
@@ -149,7 +190,9 @@ impl Audio {
             return;
         };
 
+        sink.set_volume(self.sfx_sink_volume());
         sink.append(decoder.amplify(volume));
+        // One-shots own themselves until playback ends; looping sounds stay in Audio for stopping.
         sink.detach();
     }
 
@@ -158,6 +201,20 @@ impl Audio {
         self.stop_action(ActionSound::Slide);
         self.stop_action(ActionSound::GroundSlam);
         for (_, sink) in self.doors.drain() {
+            sink.stop();
+        }
+    }
+
+    pub(super) fn start_menu_ambience(&mut self) {
+        self.start_loop_if_missing(MenuLoop::Music, MENU_MUSIC, 0.34);
+        self.start_loop_if_missing(MenuLoop::Falling, GROUND_SLAM, 0.12);
+    }
+
+    pub(super) fn stop_menu_ambience(&mut self) {
+        if let Some(sink) = self.menu_music.take() {
+            sink.stop();
+        }
+        if let Some(sink) = self.menu_falling.take() {
             sink.stop();
         }
     }
@@ -184,12 +241,36 @@ impl Audio {
             return;
         };
 
+        sink.set_volume(self.sfx_sink_volume());
         if repeat {
             sink.append(decoder.amplify(volume).repeat_infinite());
         } else {
             sink.append(decoder.amplify(volume));
         }
         *self.action_sink(action) = Some(sink);
+    }
+
+    fn start_loop_if_missing(&mut self, sound: MenuLoop, bytes: &'static [u8], volume: f32) {
+        if self.menu_sink(sound).is_some() || volume <= 0.01 {
+            return;
+        }
+        let Some(handle) = self.handle.as_ref() else {
+            return;
+        };
+        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+            return;
+        };
+        let Ok(sink) = Sink::try_new(handle) else {
+            return;
+        };
+
+        let sink_volume = match sound {
+            MenuLoop::Music => self.music_sink_volume(),
+            MenuLoop::Falling => self.sfx_sink_volume(),
+        };
+        sink.set_volume(sink_volume);
+        sink.append(decoder.amplify(volume).repeat_infinite());
+        *self.menu_sink(sound) = Some(sink);
     }
 
     fn stop_action(&mut self, action: ActionSound) {
@@ -214,6 +295,7 @@ impl Audio {
             return;
         };
 
+        sink.set_volume(self.sfx_sink_volume());
         sink.append(decoder.amplify(volume));
         self.doors.insert(index, sink);
     }
@@ -231,6 +313,21 @@ impl Audio {
             ActionSound::GroundSlam => &mut self.ground_slam,
         }
     }
+
+    fn menu_sink(&mut self, sound: MenuLoop) -> &mut Option<Sink> {
+        match sound {
+            MenuLoop::Music => &mut self.menu_music,
+            MenuLoop::Falling => &mut self.menu_falling,
+        }
+    }
+
+    fn sfx_sink_volume(&self) -> f32 {
+        self.master_volume * self.sfx_volume
+    }
+
+    fn music_sink_volume(&self) -> f32 {
+        self.master_volume * self.music_volume
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -238,6 +335,12 @@ enum ActionSound {
     Dash,
     Slide,
     GroundSlam,
+}
+
+#[derive(Clone, Copy)]
+enum MenuLoop {
+    Music,
+    Falling,
 }
 
 fn attenuation(source: Vec2, listener: Vec2) -> f32 {
@@ -251,4 +354,8 @@ fn attenuation(source: Vec2, listener: Vec2) -> f32 {
     } else {
         1.0 - (distance - 180.0) / 600.0
     }
+}
+
+fn volume_factor(value: u8) -> f32 {
+    (value.min(100) as f32) / 100.0
 }

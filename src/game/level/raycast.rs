@@ -85,7 +85,8 @@ fn raycast_solid(
     solid_index: usize,
 ) -> Option<(f32, RayHit)> {
     let local_origin = solid.local_from_world(origin);
-    let local_dir = Vec2::new(dir.dot(solid.axis_x()), dir.dot(solid.axis_y()));
+    let (axis_x, axis_y) = solid.basis();
+    let local_dir = Vec2::new(dir.dot(axis_x), dir.dot(axis_y));
     let min = Vec2::ZERO;
     let max = solid.size;
     let mut t_min = 0.0;
@@ -149,14 +150,11 @@ fn ray_hit(
 ) -> RayHit {
     let surface_axis = if hit_axis == 0 { 1 } else { 0 };
     let local_origin = solid.local_from_world(origin);
-    let local_dir = Vec2::new(dir.dot(solid.axis_x()), dir.dot(solid.axis_y()));
+    let (axis_x, axis_y) = solid.basis();
+    let local_dir = Vec2::new(dir.dot(axis_x), dir.dot(axis_y));
     let local_point = local_origin + local_dir * t_min;
-    let world_normal = solid.axis_x() * normal.x + solid.axis_y() * normal.y;
-    let tangent = if surface_axis == 0 {
-        solid.axis_x()
-    } else {
-        solid.axis_y()
-    };
+    let world_normal = axis_x * normal.x + axis_y * normal.y;
+    let tangent = if surface_axis == 0 { axis_x } else { axis_y };
 
     // Surface bounds let portal placement slide away from edges.
     RayHit {

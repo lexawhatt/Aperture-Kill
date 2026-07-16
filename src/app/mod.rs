@@ -11,6 +11,7 @@ mod menu;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::settings::{OptionsTab, Settings, VolumeKind};
 use audio::Audio;
 use camera::Camera;
 use editor::Editor;
@@ -34,6 +35,12 @@ pub struct App {
     levels: Vec<LevelSpec>,
     current_level: usize,
     mode: AppMode,
+    settings: Settings,
+    options_tab: OptionsTab,
+    binding_capture: Option<platform::input::GameKey>,
+    resolution_dropdown: bool,
+    volume_drag: Option<VolumeKind>,
+    editor_inspector_open: bool,
     editor: Editor,
     renderer: Renderer,
     audio: Audio,
@@ -41,6 +48,7 @@ pub struct App {
     cursor_screen: Vec2,
     cursor_world: Vec2,
     debug_gui: bool,
+    fps: f32,
     modifiers: ModifiersState,
     last_frame: Instant,
 }
@@ -59,7 +67,13 @@ impl App {
             world,
             levels,
             current_level: 0,
-            mode: AppMode::Playing,
+            mode: AppMode::LevelMenu,
+            settings: Settings::new(),
+            options_tab: OptionsTab::General,
+            binding_capture: None,
+            resolution_dropdown: false,
+            volume_drag: None,
+            editor_inspector_open: false,
             editor: Editor::new(),
             renderer: Renderer::new(),
             audio: Audio::new(),
@@ -67,6 +81,7 @@ impl App {
             cursor_screen: Vec2::ZERO,
             cursor_world: Vec2::ZERO,
             debug_gui: false,
+            fps: 0.0,
             modifiers: ModifiersState::empty(),
             last_frame: Instant::now(),
         }
@@ -87,16 +102,7 @@ impl App {
             return;
         };
 
-        *level = LevelSpec::from_world(
-            level.name.clone(),
-            level.spawn,
-            self.world.level.solids.clone(),
-            self.world.level.doors.clone(),
-            self.world.level.hazards.clone(),
-            self.world.level.checkpoints.clone(),
-            self.world.level.texts.clone(),
-            level.path.clone(),
-        );
+        level.replace_world(&self.world.level);
         if save_level(level).is_ok() {
             self.editor.mark_saved();
         }
@@ -122,5 +128,7 @@ impl App {
 enum AppMode {
     Playing,
     LevelMenu,
+    Changelog,
+    Options,
     Editor,
 }

@@ -10,6 +10,8 @@ use glam::Vec2;
 use crate::game::World;
 use crate::game::levels::LevelSpec;
 use crate::game::portal::Color;
+use crate::platform::input::GameKey;
+use crate::settings::{OptionsTab, Settings};
 
 use canvas::{Canvas, Rect};
 
@@ -21,7 +23,26 @@ pub enum RenderMode<'a> {
         levels: &'a [LevelSpec],
         selected: usize,
     },
-    Editor(EditorOverlay),
+    Changelog,
+    Options {
+        settings: &'a Settings,
+        active_tab: OptionsTab,
+        capture: Option<GameKey>,
+        resolution_dropdown: bool,
+    },
+    Editor(&'a EditorOverlay),
+}
+
+pub struct RenderFrame<'frame, 'data> {
+    pub frame: &'frame mut [u32],
+    pub width: u32,
+    pub height: u32,
+    pub world: &'data World,
+    pub mode: RenderMode<'data>,
+    pub camera: Vec2,
+    pub zoom: f32,
+    pub debug: Option<DebugOverlay>,
+    pub fps: Option<f32>,
 }
 
 pub struct EditorOverlay {
@@ -30,14 +51,41 @@ pub struct EditorOverlay {
     pub selected_hazards: Vec<usize>,
     pub selected_checkpoints: Vec<usize>,
     pub selected_texts: Vec<usize>,
+    pub selected_world_portals: Vec<usize>,
     pub selection_count: usize,
     pub text_editing: bool,
     pub marquee: Option<(Vec2, Vec2)>,
     pub active_tool: usize,
+    pub active_tool_label: &'static str,
+    pub selection_kind: &'static str,
+    pub inspector: EditorInspector,
+    pub inspector_open: bool,
     pub rotate_ui: bool,
     pub grid_snap: bool,
     pub dirty: bool,
     pub saved_flash: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum EditorInspector {
+    None,
+    Door(EditorDoorInspector),
+    WorldPortal(EditorWorldPortalInspector),
+}
+
+#[derive(Clone, Copy)]
+pub struct EditorDoorInspector {
+    pub automatic: bool,
+    pub trigger_radius: f32,
+    pub speed: f32,
+}
+
+#[derive(Clone, Copy)]
+pub struct EditorWorldPortalInspector {
+    pub id: u16,
+    pub receiver_id: u16,
+    pub priority: i16,
+    pub width: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -61,35 +109,48 @@ impl Renderer {
         Self
     }
 
-    pub fn draw(
-        &self,
-        frame: &mut [u32],
-        width: u32,
-        height: u32,
-        world: &World,
-        mode: RenderMode<'_>,
-        camera: Vec2,
-        zoom: f32,
-        debug: Option<DebugOverlay>,
-    ) {
+    pub fn draw(&self, render: RenderFrame<'_, '_>) {
+        let RenderFrame {
+            frame,
+            width,
+            height,
+            world,
+            mode,
+            camera,
+            zoom,
+            debug,
+            fps,
+        } = render;
         let mut canvas = Canvas::new(frame, width, height, camera, zoom);
 
         canvas.clear(Color::rgb(9, 10, 14));
         self.draw_world(&mut canvas, world);
-        canvas.draw_dash_charges(world.player.dash_charges);
+        canvas.hud(world.player.dash_charges, world.player.dash_deny_flash());
 
         match mode {
             RenderMode::Playing => {}
             RenderMode::LevelMenu { levels, selected } => {
                 canvas.level_menu(levels, selected);
             }
-            RenderMode::Editor(overlay) => {
-                canvas.editor_overlay(world, overlay);
+            RenderMode::Changelog => {
+                canvas.changelog_menu();
             }
+            RenderMode::Options {
+                settings,
+                active_tab,
+                capture,
+                resolution_dropdown,
+            } => {
+                canvas.options_menu(settings, active_tab, capture, resolution_dropdown);
+            }
+            RenderMode::Editor(overlay) => canvas.editor_overlay(world, overlay),
         }
 
         if let Some(debug) = debug {
             canvas.debug_overlay(debug);
+        }
+        if let Some(fps) = fps {
+            canvas.fps_counter(fps);
         }
     }
 
@@ -120,11 +181,31 @@ impl Renderer {
             canvas.world_text(text.pos, &text.text, 2, Color::rgb(210, 218, 230));
         }
 
+        for portal in &world.level.world_portals {
+            let (a, b) = portal.portal.endpoints();
+            canvas.draw_world_line(a, b, portal.portal.color);
+            canvas.draw_world_line(
+                portal.portal.pos,
+                portal.portal.pos + portal.portal.normal() * 16.0,
+                portal.portal.color,
+            );
+            canvas.world_text(
+                portal.portal.pos + Vec2::new(8.0, -18.0),
+                &format!("{}>{}:{}", portal.id, portal.receiver_id, portal.priority),
+                1,
+                Color::rgb(210, 198, 255),
+            );
+        }
+
         // Portals are visual-only here; physics is owned by World.
         for portal in world.portals.iter().flatten() {
             let (a, b) = portal.endpoints();
             canvas.draw_world_line(a, b, portal.color);
-            canvas.draw_world_line(portal.pos, portal.pos + portal.normal * 16.0, portal.color);
+            canvas.draw_world_line(
+                portal.pos,
+                portal.pos + portal.normal() * 16.0,
+                portal.color,
+            );
         }
 
         self.draw_player(canvas, world);
@@ -137,11 +218,11 @@ impl Renderer {
             pos: player.pos - player.half_size(),
             size: player.size,
         };
-        let fill = if player.ground_slamming {
+        let fill = if player.is_ground_slamming() {
             Color::rgb(255, 224, 102)
-        } else if player.dashing {
+        } else if player.is_dashing() {
             Color::rgb(80, 92, 130)
-        } else if player.wall_sliding {
+        } else if player.is_wall_sliding() {
             Color::rgb(62, 76, 92)
         } else {
             Color::rgb(45, 49, 59)
@@ -179,10 +260,6 @@ impl Renderer {
 }
 
 impl Color {
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
     pub(super) fn to_u32(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | self.b as u32
     }

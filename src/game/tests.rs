@@ -1,13 +1,13 @@
 use glam::Vec2;
 
 use super::World;
-use super::level::{Checkpoint, Door, Hazard, Level, Solid};
+use super::level::{Checkpoint, Door, Hazard, Level, Solid, WorldPortal};
 use super::player::{Player, PlayerEvent};
 use super::portal::{Color, Portal};
 use crate::constants::{
-    DASH_SPEED, GRAVITY, JUMP_VELOCITY, MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED,
-    PORTAL_SURFACE_OFFSET, PORTAL_WIDTH, SLAM_NORMAL_HEIGHT_GAIN, SLIDE_BOOST, WALL_JUMP_Y,
-    WALL_SLIDE_SPEED,
+    AIR_SLIDE_WALL_KICK_Y, DASH_SPEED, DIVE_BOOST, GRAVITY, JUMP_VELOCITY, MAX_DASH_CHARGES,
+    PLAYER_SIZE, PLAYER_SPEED, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH, SLAM_NORMAL_HEIGHT_GAIN,
+    SLIDE_BOOST, WALL_JUMP_Y, WALL_SLIDE_SPEED,
 };
 use crate::platform::input::{GameKey, Input};
 
@@ -20,7 +20,7 @@ fn automatic_door_opens_near_player() {
     let mut door = Door::new(100.0, 100.0, 48.0, 112.0);
     let closed_y = door.solid.pos.y;
 
-    door.update(door.solid.center(), 0.5);
+    door.update(door.solid.center(), 0.5, |_| {});
 
     assert!(door.open > 0.0);
     assert!(door.moving_solid().pos.y < closed_y);
@@ -75,7 +75,7 @@ fn portal_shot_places_on_rotated_portalable_block() {
     world.update(1.0 / 60.0, &input, 900.0, 600.0);
 
     let portal = world.portals[0].unwrap();
-    assert!(portal.normal.dot(-solid.axis_y()) > 0.99);
+    assert!(portal.normal().dot(-solid.axis_y()) > 0.99);
     assert!(portal.tangent().dot(solid.axis_x()).abs() > 0.99);
 }
 
@@ -102,7 +102,7 @@ fn portal_shot_places_on_rotated_block_inside_level() {
     world.update(1.0 / 60.0, &input, 900.0, 600.0);
 
     let portal = world.portals[0].unwrap();
-    assert!(portal.normal.dot(-solid.axis_y()) > 0.99);
+    assert!(portal.normal().dot(-solid.axis_y()) > 0.99);
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn dash_follows_aim_direction() {
 
     player.update(1.0 / 60.0, &input, 900.0, 600.0);
 
-    assert!(player.dashing);
+    assert!(player.is_dashing());
     assert!(player.vel.x > DASH_SPEED * 0.9);
     assert!(player.vel.y.abs() < 1.0);
 }
@@ -203,6 +203,20 @@ fn dash_spends_one_charge() {
 
     assert!(player.dash_charges < MAX_DASH_CHARGES);
     assert!(player.dash_charges > MAX_DASH_CHARGES - 1.1);
+}
+
+#[test]
+fn dash_without_charge_flashes_stamina() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.dash_charges = 0.0;
+    input.set_key(GameKey::Dash, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.dash_deny_flash() > 0.0);
+    assert!(!player.is_dashing());
 }
 
 #[test]
@@ -278,7 +292,7 @@ fn slide_applies_ground_boost() {
 
     player.update(1.0 / 60.0, &input, 900.0, 600.0);
 
-    assert!(player.sliding);
+    assert!(player.is_sliding());
     assert!(player.size.y < PLAYER_SIZE.1);
     assert!(player.vel.x > PLAYER_SPEED);
 }
@@ -324,7 +338,7 @@ fn ctrl_in_air_starts_ground_slam() {
     input.update();
     player.update(1.0 / 60.0, &input, 900.0, 600.0);
 
-    assert!(player.ground_slamming);
+    assert!(player.is_ground_slamming());
     assert!(player.vel.y > 100.0);
 }
 
@@ -477,7 +491,7 @@ fn wall_jump_after_slam_stores_energy_without_fast_fall() {
     input.update();
     player.update(1.0 / 60.0, &input, 900.0, 600.0);
 
-    assert!(!player.ground_slamming);
+    assert!(!player.is_ground_slamming());
     assert!(player.vel.y <= -WALL_JUMP_Y + 50.0);
 
     player.touch_ground_with_impact(100.0);
@@ -534,7 +548,7 @@ fn wall_slide_caps_fall_speed() {
 
     player.update(1.0 / 60.0, &input, 900.0, 600.0);
 
-    assert!(player.wall_sliding);
+    assert!(player.is_wall_sliding());
     assert_eq!(player.vel.y, WALL_SLIDE_SPEED);
 }
 
@@ -914,4 +928,385 @@ fn portal_does_not_place_too_close_to_other_portal() {
 
     assert!(world.portals[0].is_some());
     assert!(world.portals[1].is_none());
+}
+
+#[test]
+fn slide_pressed_in_air_starts_ground_slam() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.vel.y = -500.0;
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.is_ground_slamming());
+    assert!(!player.is_air_sliding());
+}
+
+#[test]
+fn portal_slide_starts_air_slide_on_exit() {
+    let mut player = Player::new(100.0, 100.0);
+    let input = super::player::MovementInput {
+        move_x: 0.0,
+        aim_pos: Vec2::ZERO,
+        dash_pressed: false,
+        jump_pressed: false,
+        slide_down: true,
+        slide_pressed: false,
+    };
+
+    player.on_player_portal_exit(Vec2::X, input);
+
+    assert!(player.is_air_sliding());
+    assert!(player.size.y < PLAYER_SIZE.1);
+}
+
+#[test]
+fn dash_slide_preserves_dash_speed_into_slide() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_aim_pos(Vec2::new(300.0, 100.0));
+    input.set_key(GameKey::Dash, true);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.is_sliding());
+    assert!(player.vel.x > DASH_SPEED * 0.95);
+}
+
+#[test]
+fn dash_storage_jump_preserves_dash_speed_out_of_slide() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_aim_pos(Vec2::new(300.0, 100.0));
+    input.set_key(GameKey::Dash, true);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    input.set_key(GameKey::Dash, false);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(!player.on_ground);
+    assert!(player.vel.x > DASH_SPEED * 0.95);
+    assert!(player.vel.y < 0.0);
+}
+
+#[test]
+fn dash_canceling_ground_slam_emits_slam_end() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    player.drain_events().for_each(drop);
+
+    input.set_key(GameKey::Slide, false);
+    input.set_key(GameKey::Dash, true);
+    input.set_aim_pos(player.aim_from() + Vec2::X * 100.0);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    let events: Vec<_> = player.drain_events().collect();
+    assert!(events.contains(&PlayerEvent::GroundSlamEnd));
+    assert!(events.contains(&PlayerEvent::DashStart));
+    assert!(!player.is_ground_slamming());
+}
+
+#[test]
+fn slide_after_recent_jump_starts_dive_instead_of_slam() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_aim_pos(Vec2::new(300.0, 100.0));
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    input.set_key(GameKey::Jump, false);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.is_air_sliding());
+    assert!(!player.is_ground_slamming());
+    assert!(player.vel.x > DIVE_BOOST * 0.95);
+}
+
+#[test]
+fn ordinary_dive_falls_under_normal_gravity() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    player.land();
+    input.set_aim_pos(Vec2::new(300.0, 100.0));
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    input.set_key(GameKey::Jump, false);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    input.update();
+    player.update(1.0, &input, 900.0, 600.0);
+
+    assert!(player.is_air_sliding());
+    assert!(player.vel.y > 700.0);
+}
+
+#[test]
+fn short_slide_hops_build_speed() {
+    let mut player = Player::new(100.0, 100.0);
+    let mut input = Input::new();
+
+    input.set_aim_pos(Vec2::new(300.0, 100.0));
+    player.land();
+
+    let mut previous_speed = 0.0;
+    for _ in 0..3 {
+        input.set_key(GameKey::Jump, false);
+        input.set_key(GameKey::Slide, true);
+        input.update();
+        player.update(1.0 / 120.0, &input, 900.0, 600.0);
+        let slide_speed = player.vel.x.abs();
+
+        input.set_key(GameKey::Jump, true);
+        input.update();
+        player.update(1.0 / 120.0, &input, 900.0, 600.0);
+
+        assert!(slide_speed > previous_speed);
+        previous_speed = slide_speed;
+        player.touch_ground_with_impact(200.0);
+    }
+
+    assert!(previous_speed > SLIDE_BOOST + 200.0);
+}
+
+#[test]
+fn releasing_slide_under_low_ceiling_keeps_crouch_state() {
+    let mut player = Player::new(100.0, 164.0);
+    let mut input = Input::new();
+    let blocked = Level {
+        solids: vec![
+            Solid::new(0.0, 200.0, 300.0, 40.0, true),
+            Solid::new(0.0, 120.0, 300.0, 44.0, true),
+        ],
+        ..Level::empty()
+    };
+    let open = Level {
+        solids: vec![Solid::new(0.0, 200.0, 300.0, 40.0, true)],
+        ..Level::empty()
+    };
+
+    player.land();
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    input.set_key(GameKey::Slide, false);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+    blocked.resolve_player(&mut player);
+
+    assert!(player.is_crouching());
+    assert!(player.size.y < PLAYER_SIZE.1);
+
+    open.resolve_player(&mut player);
+
+    assert!(!player.is_crouching());
+    assert_eq!(player.size.y, PLAYER_SIZE.1);
+}
+
+#[test]
+fn grounded_player_climbsteps_small_ledge() {
+    let level = Level {
+        solids: vec![
+            Solid::new(0.0, 200.0, 300.0, 40.0, true),
+            Solid::new(130.0, 176.0, 40.0, 24.0, true),
+        ],
+        ..Level::empty()
+    };
+    let mut player = Player::new(116.0, 164.0);
+    let before_y = player.pos.y;
+
+    player.land();
+    player.vel.x = 300.0;
+    level.resolve_player(&mut player);
+
+    assert!(player.pos.y < before_y - 20.0);
+    assert!(player.on_ground);
+}
+
+#[test]
+fn air_slide_wall_kick_preserves_slide_momentum() {
+    let level = Level {
+        solids: vec![Solid::new(130.0, 40.0, 40.0, 140.0, true)],
+        ..Level::empty()
+    };
+    let mut player = Player::new(120.0, 100.0);
+    let mut input = Input::new();
+    let portal_input = super::player::MovementInput {
+        move_x: 0.0,
+        aim_pos: Vec2::new(300.0, 100.0),
+        dash_pressed: false,
+        jump_pressed: false,
+        slide_down: true,
+        slide_pressed: false,
+    };
+
+    player.vel.x = 1_050.0;
+    player.on_player_portal_exit(Vec2::X, portal_input);
+    level.resolve_player(&mut player);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.x < -1_000.0);
+    assert!(player.vel.y < -AIR_SLIDE_WALL_KICK_Y + 80.0);
+}
+
+#[test]
+fn high_speed_wall_hit_enables_vertical_wall_jump() {
+    let level = Level {
+        solids: vec![Solid::new(130.0, 40.0, 40.0, 140.0, true)],
+        ..Level::empty()
+    };
+    let mut player = Player::new(120.0, 100.0);
+    let mut input = Input::new();
+
+    player.vel.x = 1_100.0;
+    level.resolve_player(&mut player);
+    input.set_key(GameKey::Jump, true);
+    input.update();
+    player.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(player.vel.x.abs() < 1.0);
+    assert!(player.vel.y < -800.0);
+}
+
+#[test]
+fn portal_kick_adds_exit_normal_impulse() {
+    let mut player = Player::new(100.0, 100.0);
+    let input = super::player::MovementInput {
+        move_x: 0.0,
+        aim_pos: Vec2::ZERO,
+        dash_pressed: false,
+        jump_pressed: true,
+        slide_down: false,
+        slide_pressed: false,
+    };
+
+    player.on_player_portal_exit(Vec2::X, input);
+
+    assert!(player.vel.x > 300.0);
+}
+
+#[test]
+fn world_portal_exit_supports_slide_air_slide() {
+    let mut world = World::new();
+    let mut input = Input::new();
+
+    world.level = Level {
+        world_portals: vec![
+            WorldPortal {
+                id: 1,
+                receiver_id: 2,
+                priority: 0,
+                portal: Portal::new(
+                    100.0,
+                    100.0,
+                    Vec2::new(-1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::BLUE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 0,
+                portal: Portal::new(
+                    260.0,
+                    100.0,
+                    Vec2::new(1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::ORANGE,
+                ),
+            },
+        ],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 100.0);
+    world.player.land();
+    world.player.vel = Vec2::new(-2_400.0, 0.0);
+    input.set_key(GameKey::Slide, true);
+    input.update();
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.player.is_air_sliding());
+}
+
+#[test]
+fn world_portal_uses_highest_priority_receiver() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        world_portals: vec![
+            WorldPortal {
+                id: 1,
+                receiver_id: 2,
+                priority: 0,
+                portal: Portal::new(
+                    100.0,
+                    100.0,
+                    Vec2::new(-1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::BLUE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 0,
+                portal: Portal::new(
+                    260.0,
+                    100.0,
+                    Vec2::new(1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::ORANGE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 10,
+                portal: Portal::new(
+                    420.0,
+                    100.0,
+                    Vec2::new(1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::ORANGE,
+                ),
+            },
+        ],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 100.0);
+    world.player.vel = Vec2::new(-2400.0, 0.0);
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.player.pos.x > 390.0);
 }
