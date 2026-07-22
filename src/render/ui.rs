@@ -492,18 +492,18 @@ impl Canvas<'_> {
         self.text(Vec2::new(left, top), "CHANGELOG", 5, text);
         self.text(
             Vec2::new(left, top + 58.0),
-            "EPSILON / MOVEMENT + UI UPDATE",
+            "ZETA / COMBAT + OPTIMIZATION UPDATE",
             2,
             text,
         );
 
         let lines = [
-            "MOVEMENT: DASH, SLIDE, SLAM, WALL TECH",
-            "PORTALS: ROTATED SURFACES AND WORLD LINKS",
-            "UI: MAIN MENU, OPTIONS, AUDIO, DISPLAY MODES",
-            "EDITOR: DOCK BAR, RMB SELECT, LMB PLACE",
-            "EDITOR: SPECIAL OBJECT INSPECTOR",
-            "SETTINGS: KEYBINDS, FPS, RESOLUTION",
+            "COMBAT: PIERCER PROTOTYPE ADDED",
+            "PLAYER: DEATH ANIMATIONS ADDED",
+            "ENEMIES: FIRST TEST ENEMY PROTOTYPES",
+            "AUDIO: EXPANDED WEAPON, DEATH, ENEMY SOUNDS",
+            "PORTALS: OPTIMIZED SEAMLESS PORTAL SYSTEM",
+            "CORE: REWORKED FILE STRUCTURE FOR PERFORMANCE",
             "KNOWN: MANUAL DOORS NEED TRIGGER SYSTEM",
         ];
         for (index, line) in lines.iter().enumerate() {
