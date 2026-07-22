@@ -430,23 +430,23 @@ impl Editor {
         for item in self.clipboard.iter().cloned() {
             match item {
                 EditorClipboard::Solid(mut solid) => {
-                    solid.pos += offset;
+                    solid.translate(offset);
                     level.solids.push(solid);
                     pasted.push(EditorSelection::Solid(level.solids.len() - 1));
                 }
                 EditorClipboard::Door(mut door) => {
-                    door.solid.pos += offset;
+                    door.solid.translate(offset);
                     door.open = 0.0;
                     level.doors.push(door);
                     pasted.push(EditorSelection::Door(level.doors.len() - 1));
                 }
                 EditorClipboard::Hazard(mut hazard) => {
-                    hazard.solid.pos += offset;
+                    hazard.solid.translate(offset);
                     level.hazards.push(hazard);
                     pasted.push(EditorSelection::Hazard(level.hazards.len() - 1));
                 }
                 EditorClipboard::Checkpoint(mut checkpoint) => {
-                    checkpoint.solid.pos += offset;
+                    checkpoint.solid.translate(offset);
                     level.checkpoints.push(checkpoint);
                     pasted.push(EditorSelection::Checkpoint(level.checkpoints.len() - 1));
                 }
@@ -1203,15 +1203,15 @@ impl Editor {
 
     fn object_pos(level: &Level, selection: EditorSelection) -> Option<Vec2> {
         match selection {
-            EditorSelection::Solid(index) => level.solids.get(index).map(|solid| solid.pos),
-            EditorSelection::Door(index) => level.doors.get(index).map(|door| door.solid.pos),
+            EditorSelection::Solid(index) => level.solids.get(index).map(|solid| solid.pos()),
+            EditorSelection::Door(index) => level.doors.get(index).map(|door| door.solid.pos()),
             EditorSelection::Hazard(index) => {
-                level.hazards.get(index).map(|hazard| hazard.solid.pos)
+                level.hazards.get(index).map(|hazard| hazard.solid.pos())
             }
             EditorSelection::Checkpoint(index) => level
                 .checkpoints
                 .get(index)
-                .map(|checkpoint| checkpoint.solid.pos),
+                .map(|checkpoint| checkpoint.solid.pos()),
             EditorSelection::Text(index) => level.texts.get(index).map(|text| text.pos),
             EditorSelection::WorldPortal(index) => {
                 level.world_portals.get(index).map(|portal| portal.center())
@@ -1225,22 +1225,22 @@ impl Editor {
         match selection {
             EditorSelection::Solid(index) => {
                 if let Some(solid) = level.solids.get_mut(index) {
-                    solid.pos = pos;
+                    solid.set_pos(pos);
                 }
             }
             EditorSelection::Door(index) => {
                 if let Some(door) = level.doors.get_mut(index) {
-                    door.solid.pos = pos;
+                    door.solid.set_pos(pos);
                 }
             }
             EditorSelection::Hazard(index) => {
                 if let Some(hazard) = level.hazards.get_mut(index) {
-                    hazard.solid.pos = pos;
+                    hazard.solid.set_pos(pos);
                 }
             }
             EditorSelection::Checkpoint(index) => {
                 if let Some(checkpoint) = level.checkpoints.get_mut(index) {
-                    checkpoint.solid.pos = pos;
+                    checkpoint.solid.set_pos(pos);
                 }
             }
             EditorSelection::Text(index) => {
@@ -1265,23 +1265,28 @@ impl Editor {
         match selection {
             EditorSelection::Solid(index) => {
                 if let Some(solid) = level.solids.get_mut(index) {
-                    solid.pos = maybe_snap(center - solid.size / 2.0, grid_snap);
+                    solid.set_pos(maybe_snap(center - solid.size() / 2.0, grid_snap));
                 }
             }
             EditorSelection::Door(index) => {
                 if let Some(door) = level.doors.get_mut(index) {
-                    door.solid.pos = maybe_snap(center - door.solid.size / 2.0, grid_snap);
+                    door.solid
+                        .set_pos(maybe_snap(center - door.solid.size() / 2.0, grid_snap));
                 }
             }
             EditorSelection::Hazard(index) => {
                 if let Some(hazard) = level.hazards.get_mut(index) {
-                    hazard.solid.pos = maybe_snap(center - hazard.solid.size / 2.0, grid_snap);
+                    hazard
+                        .solid
+                        .set_pos(maybe_snap(center - hazard.solid.size() / 2.0, grid_snap));
                 }
             }
             EditorSelection::Checkpoint(index) => {
                 if let Some(checkpoint) = level.checkpoints.get_mut(index) {
-                    checkpoint.solid.pos =
-                        maybe_snap(center - checkpoint.solid.size / 2.0, grid_snap);
+                    checkpoint.solid.set_pos(maybe_snap(
+                        center - checkpoint.solid.size() / 2.0,
+                        grid_snap,
+                    ));
                 }
             }
             EditorSelection::Text(index) => {
@@ -1340,14 +1345,14 @@ impl Editor {
         let local_start_cursor = start.local_from_world(start_cursor);
         let local_cursor = start.local_from_world(pos);
         let delta = maybe_snap_delta(local_cursor - local_start_cursor, grid_snap);
-        let (min, max) = resized_local_bounds(edge_x, edge_y, delta, start.size);
+        let start_size = start.size();
+        let (min, max) = resized_local_bounds(edge_x, edge_y, delta, start_size);
 
         let center = start.center()
-            + start.axis_x() * ((min.x + max.x - start.size.x) / 2.0)
-            + start.axis_y() * ((min.y + max.y - start.size.y) / 2.0);
+            + start.axis_x() * ((min.x + max.x - start_size.x) / 2.0)
+            + start.axis_y() * ((min.y + max.y - start_size.y) / 2.0);
 
-        solid.size = max - min;
-        solid.pos = center - solid.size / 2.0;
+        solid.set_centered_rect(center, max - min);
         solid.set_rotation(start.rotation());
     }
 }
@@ -1584,7 +1589,7 @@ fn apply_edit_solid_to_world_portal(portal: &mut WorldPortal, solid: Solid) {
         solid.center().y,
         -solid.axis_y(),
         solid.axis_x(),
-        solid.size.x.max(24.0),
+        solid.size().x.max(24.0),
         portal.portal.color,
     );
 

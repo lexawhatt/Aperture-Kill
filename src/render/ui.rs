@@ -1851,9 +1851,11 @@ impl Canvas<'_> {
             .min(available_width * 0.86)
             .clamp(300.0, 760.0);
         let center_x = (left_bound + right_bound) * 0.5;
+        let min_x = left_bound;
+        let max_x = (right_bound - target_size).max(min_x);
         let max_y = (height - target_size - 88.0).max(92.0);
         let pos = Vec2::new(
-            (center_x - target_size * 0.5).clamp(left_bound, right_bound - target_size),
+            (center_x - target_size * 0.5).clamp(min_x, max_x),
             ((height - target_size) * 0.48).clamp(92.0, max_y),
         );
 

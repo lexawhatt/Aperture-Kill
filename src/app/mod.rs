@@ -55,6 +55,10 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
+        Self::new_with_audio(Audio::new())
+    }
+
+    fn new_with_audio(audio: Audio) -> Self {
         let levels = load_levels();
         let world = World::from_level(&levels[0]);
         let camera = Camera::new(world.player.pos);
@@ -76,7 +80,7 @@ impl App {
             editor_inspector_open: false,
             editor: Editor::new(),
             renderer: Renderer::new(),
-            audio: Audio::new(),
+            audio,
             camera,
             cursor_screen: Vec2::ZERO,
             cursor_world: Vec2::ZERO,
@@ -131,4 +135,51 @@ enum AppMode {
     Changelog,
     Options,
     Editor,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::input::GameKey;
+    use winit::keyboard::KeyCode;
+
+    fn test_app() -> App {
+        App::new_with_audio(Audio::silent())
+    }
+
+    #[test]
+    fn menu_keyboard_selection_stays_in_bounds() {
+        let mut app = test_app();
+
+        app.handle_menu_key(KeyCode::ArrowUp);
+        assert_eq!(app.current_level, 0);
+
+        app.handle_menu_key(KeyCode::ArrowDown);
+        assert!(app.current_level < app.levels.len());
+    }
+
+    #[test]
+    fn options_escape_clears_binding_before_leaving_menu() {
+        let mut app = test_app();
+
+        app.mode = AppMode::Options;
+        app.binding_capture = Some(GameKey::Jump);
+        app.handle_options_key(KeyCode::Escape);
+
+        assert!(app.binding_capture.is_none());
+        assert!(matches!(app.mode, AppMode::Options));
+
+        app.handle_options_key(KeyCode::Escape);
+        assert!(matches!(app.mode, AppMode::LevelMenu));
+    }
+
+    #[test]
+    fn changelog_confirm_returns_to_level_menu() {
+        let mut app = test_app();
+
+        app.mode = AppMode::Changelog;
+        app.handle_changelog_key(KeyCode::Enter);
+
+        assert!(matches!(app.mode, AppMode::LevelMenu));
+    }
 }

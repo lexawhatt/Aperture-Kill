@@ -8,7 +8,7 @@ use crate::app::{App, AppMode};
 use crate::settings::{OptionsClick, VolumeKind};
 
 impl App {
-    pub(super) fn handle_menu_key(&mut self, code: KeyCode) {
+    pub(in crate::app) fn handle_menu_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::ArrowUp | KeyCode::KeyW => {
                 self.current_level = self.current_level.saturating_sub(1);
@@ -21,7 +21,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_options_key(&mut self, code: KeyCode) {
+    pub(in crate::app) fn handle_options_key(&mut self, code: KeyCode) {
         if let Some(key) = self.binding_capture {
             if code == KeyCode::Escape {
                 self.binding_capture = None;
@@ -39,7 +39,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_changelog_key(&mut self, code: KeyCode) {
+    pub(in crate::app) fn handle_changelog_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::Space => {
                 self.mode = AppMode::LevelMenu;

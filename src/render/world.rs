@@ -64,12 +64,12 @@ impl Canvas<'_> {
         self.solid(panel, Color::rgb(74, 82, 93), Color::rgb(172, 181, 194));
         self.door_slats(panel);
 
-        let local_y = panel.size.y * 0.68;
+        let local_y = panel.size().y * 0.68;
         let stripe_h = 10.0;
         let stripe = Solid::rotated(
-            panel.pos.x,
-            panel.pos.y + local_y,
-            panel.size.x,
+            panel.pos().x,
+            panel.pos().y + local_y,
+            panel.size().x,
             stripe_h,
             panel.rotation(),
             false,
@@ -82,14 +82,14 @@ impl Canvas<'_> {
         let solid = hazard.solid;
 
         self.solid(solid, Color::rgb(36, 105, 62), Color::rgb(124, 255, 120));
-        let wave_count = (solid.size.x / 24.0).ceil().max(2.0) as usize;
+        let wave_count = (solid.size().x / 24.0).ceil().max(2.0) as usize;
 
         for index in 0..wave_count {
-            let x0 = index as f32 / wave_count as f32 * solid.size.x;
-            let x1 = (index as f32 + 0.5) / wave_count as f32 * solid.size.x;
-            let x2 = (index as f32 + 1.0) / wave_count as f32 * solid.size.x;
-            let y_mid = solid.size.y * 0.42;
-            let y_peak = solid.size.y * 0.22;
+            let x0 = index as f32 / wave_count as f32 * solid.size().x;
+            let x1 = (index as f32 + 0.5) / wave_count as f32 * solid.size().x;
+            let x2 = (index as f32 + 1.0) / wave_count as f32 * solid.size().x;
+            let y_mid = solid.size().y * 0.42;
+            let y_peak = solid.size().y * 0.22;
 
             self.draw_world_line(
                 solid.world_from_local(Vec2::new(x0, y_mid)),
@@ -110,18 +110,18 @@ impl Canvas<'_> {
 
         self.solid_outline(solid, Color::rgb(80, 190, 255));
         self.draw_world_line(
-            center + Vec2::new(0.0, solid.size.y / 2.0),
-            center + Vec2::new(0.0, -solid.size.y / 2.0),
+            center + Vec2::new(0.0, solid.size().y / 2.0),
+            center + Vec2::new(0.0, -solid.size().y / 2.0),
             Color::rgb(80, 190, 255),
         );
         self.draw_world_line(
-            center + Vec2::new(0.0, -solid.size.y / 2.0),
-            center + Vec2::new(solid.size.x * 0.36, -solid.size.y * 0.3),
+            center + Vec2::new(0.0, -solid.size().y / 2.0),
+            center + Vec2::new(solid.size().x * 0.36, -solid.size().y * 0.3),
             Color::rgb(80, 190, 255),
         );
         self.draw_world_line(
-            center + Vec2::new(solid.size.x * 0.36, -solid.size.y * 0.3),
-            center + Vec2::new(0.0, -solid.size.y * 0.1),
+            center + Vec2::new(solid.size().x * 0.36, -solid.size().y * 0.3),
+            center + Vec2::new(0.0, -solid.size().y * 0.1),
             Color::rgb(80, 190, 255),
         );
     }
@@ -149,8 +149,8 @@ impl Canvas<'_> {
 
         self.solid(solid, fill, outline);
         self.draw_world_line(
-            center + Vec2::new(-solid.size.x * 0.32, -solid.size.y * 0.12),
-            center + Vec2::new(solid.size.x * 0.32, -solid.size.y * 0.12),
+            center + Vec2::new(-solid.size().x * 0.32, -solid.size().y * 0.12),
+            center + Vec2::new(solid.size().x * 0.32, -solid.size().y * 0.12),
             Color::rgb(20, 5, 5),
         );
         self.fill_world_rect(
@@ -372,13 +372,13 @@ impl Canvas<'_> {
     }
 
     fn door_slats(&mut self, solid: Solid) {
-        let count = (solid.size.y / 18.0).floor().max(2.0) as usize;
+        let count = (solid.size().y / 18.0).floor().max(2.0) as usize;
 
         for index in 1..count {
-            let y = index as f32 / count as f32 * solid.size.y;
+            let y = index as f32 / count as f32 * solid.size().y;
             self.draw_world_line(
                 solid.world_from_local(Vec2::new(0.0, y)),
-                solid.world_from_local(Vec2::new(solid.size.x, y)),
+                solid.world_from_local(Vec2::new(solid.size().x, y)),
                 Color::rgb(42, 48, 58),
             );
         }
@@ -387,13 +387,13 @@ impl Canvas<'_> {
     pub(super) fn resize_handles(&mut self, solid: Solid, color: Color) {
         let points = [
             Vec2::ZERO,
-            Vec2::new(solid.size.x / 2.0, 0.0),
-            Vec2::new(solid.size.x, 0.0),
-            Vec2::new(solid.size.x, solid.size.y / 2.0),
-            solid.size,
-            Vec2::new(solid.size.x / 2.0, solid.size.y),
-            Vec2::new(0.0, solid.size.y),
-            Vec2::new(0.0, solid.size.y / 2.0),
+            Vec2::new(solid.size().x / 2.0, 0.0),
+            Vec2::new(solid.size().x, 0.0),
+            Vec2::new(solid.size().x, solid.size().y / 2.0),
+            solid.size(),
+            Vec2::new(solid.size().x / 2.0, solid.size().y),
+            Vec2::new(0.0, solid.size().y),
+            Vec2::new(0.0, solid.size().y / 2.0),
         ];
 
         for point in points {
@@ -410,7 +410,7 @@ impl Canvas<'_> {
 
     pub(super) fn rotate_handle(&mut self, solid: Solid, color: Color) {
         let center = solid.center();
-        let radius = solid.size.x.max(solid.size.y) / 2.0 + 18.0;
+        let radius = solid.size().x.max(solid.size().y) / 2.0 + 18.0;
         let mut previous = center + Vec2::new(radius, 0.0);
 
         for step in 1..=32 {
@@ -473,9 +473,9 @@ fn seamless_receiver_index(portals: &[WorldPortal], source_index: usize) -> Opti
 
 fn transformed_solid(from: Portal, to: Portal, solid: Solid) -> Option<Solid> {
     let p0 = from.map_view_point_to(&to, solid.world_from_local(Vec2::ZERO));
-    let p1 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(solid.size.x, 0.0)));
-    let p2 = from.map_view_point_to(&to, solid.world_from_local(solid.size));
-    let p3 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(0.0, solid.size.y)));
+    let p1 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(solid.size().x, 0.0)));
+    let p2 = from.map_view_point_to(&to, solid.world_from_local(solid.size()));
+    let p3 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(0.0, solid.size().y)));
     let axis_x = p1 - p0;
     let axis_y = p3 - p0;
     let width = axis_x.length();
@@ -538,15 +538,15 @@ fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
 
     if local.x >= -SEAMLESS_CUT_EPSILON
         && local.y >= -SEAMLESS_CUT_EPSILON
-        && local.x <= solid.size.x + SEAMLESS_CUT_EPSILON
-        && local.y <= solid.size.y + SEAMLESS_CUT_EPSILON
+        && local.x <= solid.size().x + SEAMLESS_CUT_EPSILON
+        && local.y <= solid.size().y + SEAMLESS_CUT_EPSILON
     {
         let on_left = local.x.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_x) > 0.95;
         let on_right =
-            (local.x - solid.size.x).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_x) > 0.95;
+            (local.x - solid.size().x).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_x) > 0.95;
         let on_top = local.y.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_y) > 0.95;
         let on_bottom =
-            (local.y - solid.size.y).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_y) > 0.95;
+            (local.y - solid.size().y).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_y) > 0.95;
 
         return on_left || on_right || on_top || on_bottom;
     }

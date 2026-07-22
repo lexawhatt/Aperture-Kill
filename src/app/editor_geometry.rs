@@ -88,11 +88,11 @@ pub(super) fn solid_at(pos: Vec2, solid: Solid, rotate_ui: bool) -> Option<Solid
     }
 
     let local = solid.local_from_world(pos);
-    if outside_padded_body(local, solid.size) {
+    if outside_padded_body(local, solid.size()) {
         return None;
     }
 
-    resize_hit(local, solid.size).or(Some(SolidHit::Body))
+    resize_hit(local, solid.size()).or(Some(SolidHit::Body))
 }
 
 pub(super) fn resized_local_bounds(
@@ -133,12 +133,12 @@ pub(super) fn solid_intersects_rect(solid: Solid, rect_pos: Vec2, rect_size: Vec
         .iter()
         .copied()
         .reduce(Vec2::min)
-        .unwrap_or(solid.pos);
+        .unwrap_or(solid.pos());
     let solid_max = corners
         .iter()
         .copied()
         .reduce(Vec2::max)
-        .unwrap_or(solid.pos + solid.size);
+        .unwrap_or(solid.pos() + solid.size());
 
     solid_min.x <= rect_max.x
         && solid_max.x >= rect_pos.x
@@ -220,7 +220,7 @@ fn resize_hit(local: Vec2, size: Vec2) -> Option<SolidHit> {
 
 fn rotate_hit(pos: Vec2, solid: Solid) -> bool {
     let center = solid.center();
-    let radius = solid.size.x.max(solid.size.y) / 2.0 + ROTATE_RING_OFFSET;
+    let radius = solid.size().x.max(solid.size().y) / 2.0 + ROTATE_RING_OFFSET;
     let distance = pos.distance(center);
     let rotation = solid.rotation();
     let handle_dir = Vec2::new(rotation.sin(), -rotation.cos());

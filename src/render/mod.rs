@@ -350,3 +350,54 @@ impl Color {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | self.b as u32
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_playing_frame_touches_pixels() {
+        let renderer = Renderer::new();
+        let world = World::new();
+        let mut frame = vec![0; 320 * 180];
+
+        renderer.draw(RenderFrame {
+            frame: &mut frame,
+            width: 320,
+            height: 180,
+            world: &world,
+            mode: RenderMode::Playing,
+            camera: world.player.pos,
+            zoom: 0.5,
+            debug: None,
+            fps: None,
+        });
+
+        assert!(frame.iter().any(|pixel| *pixel != 0));
+    }
+
+    #[test]
+    fn draw_level_menu_frame_touches_pixels() {
+        let renderer = Renderer::new();
+        let world = World::new();
+        let levels = vec![LevelSpec::fallback()];
+        let mut frame = vec![0; 320 * 180];
+
+        renderer.draw(RenderFrame {
+            frame: &mut frame,
+            width: 320,
+            height: 180,
+            world: &world,
+            mode: RenderMode::LevelMenu {
+                levels: &levels,
+                selected: 0,
+            },
+            camera: world.player.pos,
+            zoom: 0.5,
+            debug: None,
+            fps: None,
+        });
+
+        assert!(frame.iter().any(|pixel| *pixel != 0));
+    }
+}

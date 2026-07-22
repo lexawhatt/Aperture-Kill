@@ -18,12 +18,12 @@ fn test_portal() -> Portal {
 #[test]
 fn automatic_door_opens_near_player() {
     let mut door = Door::new(100.0, 100.0, 48.0, 112.0);
-    let closed_y = door.solid.pos.y;
+    let closed_y = door.solid.pos().y;
 
     door.update(door.solid.center(), 0.5, |_| {});
 
     assert!(door.open > 0.0);
-    assert!(door.moving_solid().pos.y < closed_y);
+    assert!(door.moving_solid().pos().y < closed_y);
 }
 
 #[test]
@@ -694,7 +694,7 @@ fn portal_scale_uses_destination_over_source_ratio() {
 #[test]
 fn world_portal_exit_from_rotated_block_preserves_momentum() {
     let ramp = Solid::rotated(520.0, 330.0, 180.0, 32.0, std::f32::consts::FRAC_PI_4, true);
-    let ramp_surface = ramp.world_from_local(Vec2::new(ramp.size.x / 2.0, 0.0));
+    let ramp_surface = ramp.world_from_local(Vec2::new(ramp.size().x / 2.0, 0.0));
     let ramp_normal = -ramp.axis_y();
     let mut world = World::new();
     let input = Input::new();
@@ -834,7 +834,7 @@ fn portal_does_not_open_back_side_collision() {
 #[test]
 fn rotated_portal_opens_only_its_surface() {
     let solid = Solid::rotated(250.0, 250.0, 180.0, 36.0, std::f32::consts::FRAC_PI_6, true);
-    let surface = solid.world_from_local(Vec2::new(solid.size.x / 2.0, 0.0));
+    let surface = solid.world_from_local(Vec2::new(solid.size().x / 2.0, 0.0));
     let normal = -solid.axis_y();
     let portal = Portal::new(
         surface.x + normal.x * PORTAL_SURFACE_OFFSET,
@@ -858,7 +858,7 @@ fn rotated_portal_opens_only_its_surface() {
 #[test]
 fn portal_does_not_open_rotated_solid_edges() {
     let solid = Solid::rotated(250.0, 250.0, 180.0, 36.0, std::f32::consts::FRAC_PI_6, true);
-    let surface = solid.world_from_local(Vec2::new(solid.size.x / 2.0, 0.0));
+    let surface = solid.world_from_local(Vec2::new(solid.size().x / 2.0, 0.0));
     let normal = -solid.axis_y();
     let portal = Portal::new(
         surface.x + normal.x * PORTAL_SURFACE_OFFSET,
@@ -867,7 +867,7 @@ fn portal_does_not_open_rotated_solid_edges() {
         220.0,
         Color::BLUE,
     );
-    let side = solid.world_from_local(Vec2::new(solid.size.x, solid.size.y / 2.0));
+    let side = solid.world_from_local(Vec2::new(solid.size().x, solid.size().y / 2.0));
     let mut player = Player::new(
         side.x + solid.axis_x().x * 8.0,
         side.y + solid.axis_x().y * 8.0,

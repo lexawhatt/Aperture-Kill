@@ -14,8 +14,8 @@ const DEFAULT_DOOR_SPEED: f32 = 3.6;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Solid {
-    pub pos: Vec2,
-    pub size: Vec2,
+    pos: Vec2,
+    size: Vec2,
     pub portalable: bool,
     rotation: f32,
     axis_x: Vec2,
@@ -58,6 +58,27 @@ impl Solid {
 
     pub fn rotation(self) -> f32 {
         self.rotation
+    }
+
+    pub fn pos(self) -> Vec2 {
+        self.pos
+    }
+
+    pub fn size(self) -> Vec2 {
+        self.size
+    }
+
+    pub fn set_pos(&mut self, pos: Vec2) {
+        self.pos = pos;
+    }
+
+    pub fn translate(&mut self, offset: Vec2) {
+        self.pos += offset;
+    }
+
+    pub fn set_centered_rect(&mut self, center: Vec2, size: Vec2) {
+        self.size = Vec2::new(size.x.max(1.0), size.y.max(1.0));
+        self.pos = center - self.size / 2.0;
     }
 
     pub fn basis(self) -> (Vec2, Vec2) {
@@ -106,6 +127,24 @@ impl Solid {
             self.world_from_local(self.size),
             self.world_from_local(Vec2::new(0.0, self.size.y)),
         ]
+    }
+
+    pub fn bounds(self) -> (Vec2, Vec2) {
+        self.corners().into_iter().fold(
+            (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+            |(min, max), corner| (min.min(corner), max.max(corner)),
+        )
+    }
+
+    pub fn overlaps_body_bounds(self, center: Vec2, half_size: Vec2) -> bool {
+        let (solid_min, solid_max) = self.bounds();
+        let body_min = center - half_size;
+        let body_max = center + half_size;
+
+        solid_min.x < body_max.x
+            && solid_max.x > body_min.x
+            && solid_min.y < body_max.y
+            && solid_max.y > body_min.y
     }
 
     pub fn overlaps_aabb(self, center: Vec2, half_size: Vec2) -> bool {

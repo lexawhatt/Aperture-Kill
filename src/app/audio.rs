@@ -80,25 +80,34 @@ impl Audio {
                      Arch: sudo pacman -S alsa-lib"
                 );
 
-                Self {
-                    _stream: None,
-                    handle: None,
-                    dash: None,
-                    slide: None,
-                    ground_slam: None,
-                    piercer_charge: None,
-                    death_sequence: None,
-                    death_skull: None,
-                    death_camera_cut: None,
-                    menu_music: None,
-                    menu_falling: None,
-                    doors: HashMap::new(),
-                    piercer_shot_index: 0,
-                    master_volume: 1.0,
-                    sfx_volume: 1.0,
-                    music_volume: 1.0,
-                }
+                Self::disabled()
             }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn silent() -> Self {
+        Self::disabled()
+    }
+
+    fn disabled() -> Self {
+        Self {
+            _stream: None,
+            handle: None,
+            dash: None,
+            slide: None,
+            ground_slam: None,
+            piercer_charge: None,
+            death_sequence: None,
+            death_skull: None,
+            death_camera_cut: None,
+            menu_music: None,
+            menu_falling: None,
+            doors: HashMap::new(),
+            piercer_shot_index: 0,
+            master_volume: 1.0,
+            sfx_volume: 1.0,
+            music_volume: 1.0,
         }
     }
 

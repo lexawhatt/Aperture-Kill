@@ -10,6 +10,7 @@ use crate::game::portal::Portal;
 use super::{Level, RAY_EPSILON, Solid};
 
 impl Level {
+    #[cfg(test)]
     pub fn resolve_player(&self, player: &mut Player) {
         self.resolve_player_with_portals(player, &[]);
     }
@@ -95,7 +96,7 @@ impl Level {
         }
 
         let bottom = player.pos.y + player.half_size().y;
-        let step = bottom - solid.pos.y;
+        let step = bottom - solid.pos().y;
         if !(0.0..=CLIMBSTEP_HEIGHT).contains(&step) {
             return false;
         }
@@ -197,13 +198,13 @@ fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
 
     if local.x >= -RAY_EPSILON
         && local.y >= -RAY_EPSILON
-        && local.x <= solid.size.x + RAY_EPSILON
-        && local.y <= solid.size.y + RAY_EPSILON
+        && local.x <= solid.size().x + RAY_EPSILON
+        && local.y <= solid.size().y + RAY_EPSILON
     {
         let on_left = local.x.abs() < RAY_EPSILON && normal.dot(-axis_x) > 0.95;
-        let on_right = (local.x - solid.size.x).abs() < RAY_EPSILON && normal.dot(axis_x) > 0.95;
+        let on_right = (local.x - solid.size().x).abs() < RAY_EPSILON && normal.dot(axis_x) > 0.95;
         let on_top = local.y.abs() < RAY_EPSILON && normal.dot(-axis_y) > 0.95;
-        let on_bottom = (local.y - solid.size.y).abs() < RAY_EPSILON && normal.dot(axis_y) > 0.95;
+        let on_bottom = (local.y - solid.size().y).abs() < RAY_EPSILON && normal.dot(axis_y) > 0.95;
 
         return on_left || on_right || on_top || on_bottom;
     }
@@ -212,6 +213,10 @@ fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
 }
 
 fn body_solid_overlap(center: Vec2, half_size: Vec2, solid: Solid) -> Option<Vec2> {
+    if !solid.overlaps_body_bounds(center, half_size) {
+        return None;
+    }
+
     let solid_center = solid.center();
     let (axis_x, axis_y) = solid.basis();
     let axes = [Vec2::X, Vec2::Y, axis_x, axis_y];
@@ -221,7 +226,7 @@ fn body_solid_overlap(center: Vec2, half_size: Vec2, solid: Solid) -> Option<Vec
     for axis in axes {
         let player_extent = projected_extent(half_size, axis);
         let solid_extent =
-            projected_extent(solid.size / 2.0, axis_from_solid(axis, axis_x, axis_y));
+            projected_extent(solid.size() / 2.0, axis_from_solid(axis, axis_x, axis_y));
         let delta = center.dot(axis) - solid_center.dot(axis);
         let overlap = player_extent + solid_extent - delta.abs();
 

@@ -107,10 +107,10 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
     for solid in &level.solids {
         body.push_str(&format!(
             "solid {} {} {} {} {} {}\n",
-            solid.pos.x,
-            solid.pos.y,
-            solid.size.x,
-            solid.size.y,
+            solid.pos().x,
+            solid.pos().y,
+            solid.size().x,
+            solid.size().y,
             solid.portalable,
             solid.rotation()
         ));
@@ -118,10 +118,10 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
     for door in &level.doors {
         body.push_str(&format!(
             "door {} {} {} {} {} {} {} {}\n",
-            door.solid.pos.x,
-            door.solid.pos.y,
-            door.solid.size.x,
-            door.solid.size.y,
+            door.solid.pos().x,
+            door.solid.pos().y,
+            door.solid.size().x,
+            door.solid.size().y,
             door.trigger_radius,
             door.solid.rotation(),
             door.speed,
@@ -131,20 +131,20 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
     for hazard in &level.hazards {
         body.push_str(&format!(
             "hazard {} {} {} {} {}\n",
-            hazard.solid.pos.x,
-            hazard.solid.pos.y,
-            hazard.solid.size.x,
-            hazard.solid.size.y,
+            hazard.solid.pos().x,
+            hazard.solid.pos().y,
+            hazard.solid.size().x,
+            hazard.solid.size().y,
             hazard.solid.rotation()
         ));
     }
     for checkpoint in &level.checkpoints {
         body.push_str(&format!(
             "checkpoint {} {} {} {}\n",
-            checkpoint.solid.pos.x,
-            checkpoint.solid.pos.y,
-            checkpoint.solid.size.x,
-            checkpoint.solid.size.y
+            checkpoint.solid.pos().x,
+            checkpoint.solid.pos().y,
+            checkpoint.solid.size().x,
+            checkpoint.solid.size().y
         ));
     }
     for enemy in &level.enemies {
@@ -218,52 +218,27 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 name = parts.collect::<Vec<_>>().join(" ");
             }
             Some("player") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some(pos) = parse_vec2(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
-                    continue;
-                };
-                spawn = Vec2::new(x, y);
+
+                spawn = pos;
             }
             Some("solid") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some((pos, size)) = parse_rect(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(w) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(h) = parse_next(&mut parts) else {
-                    continue;
-                };
-                // Skip a bad row instead of letting negative or zero extents poison collision math.
-                if !valid_size(w, h) {
-                    continue;
-                }
                 let portalable = parts.next().is_none_or(|value| value != "false");
                 let rotation = parse_next(&mut parts).unwrap_or(0.0);
 
-                solids.push(Solid::rotated(x, y, w, h, rotation, portalable));
+                solids.push(Solid::rotated(
+                    pos.x, pos.y, size.x, size.y, rotation, portalable,
+                ));
             }
             Some("door") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some((pos, size)) = parse_rect(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(w) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(h) = parse_next(&mut parts) else {
-                    continue;
-                };
-                if !valid_size(w, h) {
-                    continue;
-                }
                 let trigger_radius = parse_next(&mut parts)
                     .filter(|value| *value > 0.0)
                     .unwrap_or(112.0);
@@ -272,7 +247,7 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                     .filter(|value| *value > 0.0)
                     .unwrap_or(3.6);
                 let automatic = parts.next().is_none_or(|value| value != "false");
-                let mut door = Door::with_radius(x, y, w, h, trigger_radius);
+                let mut door = Door::with_radius(pos.x, pos.y, size.x, size.y, trigger_radius);
 
                 door.solid.set_rotation(rotation);
                 door.speed = speed.max(0.1);
@@ -280,91 +255,52 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 doors.push(door);
             }
             Some("hazard") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some((pos, size)) = parse_rect(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(w) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(h) = parse_next(&mut parts) else {
-                    continue;
-                };
-                if !valid_size(w, h) {
-                    continue;
-                }
                 let rotation = parse_next(&mut parts).unwrap_or(0.0);
-                let mut hazard = Hazard::new(x, y, w, h);
+                let mut hazard = Hazard::new(pos.x, pos.y, size.x, size.y);
 
                 hazard.solid.set_rotation(rotation);
                 hazards.push(hazard);
             }
             Some("checkpoint") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some((pos, size)) = parse_rect(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(w) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(h) = parse_next(&mut parts) else {
-                    continue;
-                };
-                if !valid_size(w, h) {
-                    continue;
-                }
 
-                checkpoints.push(Checkpoint::new(x, y, w, h));
+                checkpoints.push(Checkpoint::new(pos.x, pos.y, size.x, size.y));
             }
             Some("enemy") => {
                 let Some(kind) = parts.next() else {
                     continue;
                 };
-                let Some(x) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(y) = parse_next(&mut parts) else {
+                let Some(pos) = parse_vec2(&mut parts) else {
                     continue;
                 };
 
                 if kind.eq_ignore_ascii_case("filth") {
-                    enemies.push(Enemy::filth(x, y));
+                    enemies.push(Enemy::filth(pos.x, pos.y));
                 }
             }
             Some("text") => {
-                let Some(x) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(y) = parse_next(&mut parts) else {
+                let Some(pos) = parse_vec2(&mut parts) else {
                     continue;
                 };
                 let text = parts.collect::<Vec<_>>().join(" ");
 
                 if !text.is_empty() {
-                    texts.push(LevelText::new(Vec2::new(x, y), text));
+                    texts.push(LevelText::new(pos, text));
                 }
             }
             Some("world_portal") => {
-                let Some(x) = parse_next(&mut parts) else {
+                let Some(pos) = parse_vec2(&mut parts) else {
                     continue;
                 };
-                let Some(y) = parse_next(&mut parts) else {
+                let Some(normal) = parse_vec2(&mut parts) else {
                     continue;
                 };
-                let Some(nx) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(ny) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(tx) = parse_next(&mut parts) else {
-                    continue;
-                };
-                let Some(ty) = parse_next(&mut parts) else {
+                let Some(tangent) = parse_vec2(&mut parts) else {
                     continue;
                 };
                 let width = parse_next(&mut parts)
@@ -383,10 +319,10 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                     seamless_rely_on_walls,
                 ) = parse_world_portal_extras(&extras);
                 let mut portal = Portal::with_tangent(
-                    x,
-                    y,
-                    Vec2::new(nx, ny),
-                    Vec2::new(tx, ty),
+                    pos.x,
+                    pos.y,
+                    normal,
+                    tangent,
                     width,
                     Color::rgb(154, 120, 255),
                 );
@@ -429,6 +365,17 @@ fn parse_next<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<f32> {
         .parse::<f32>()
         .ok()
         .filter(|value| value.is_finite())
+}
+
+fn parse_vec2<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<Vec2> {
+    Some(Vec2::new(parse_next(parts)?, parse_next(parts)?))
+}
+
+fn parse_rect<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<(Vec2, Vec2)> {
+    let pos = parse_vec2(parts)?;
+    let size = parse_vec2(parts)?;
+
+    valid_size(size.x, size.y).then_some((pos, size))
 }
 
 fn parse_next_u16<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<u16> {

@@ -111,7 +111,7 @@ fn raycast_solid(
     let (axis_x, axis_y) = solid.basis();
     let local_dir = Vec2::new(dir.dot(axis_x), dir.dot(axis_y));
     let min = Vec2::ZERO;
-    let max = solid.size;
+    let max = solid.size();
     let mut t_min = 0.0;
     let mut t_max = max_distance;
     let mut normal = Vec2::ZERO;
@@ -187,7 +187,7 @@ fn ray_hit(
         solid_index,
         surface_coord: local_point[surface_axis],
         surface_min: 0.0,
-        surface_max: solid.size[surface_axis],
-        surface_span: solid.size[surface_axis],
+        surface_max: solid.size()[surface_axis],
+        surface_span: solid.size()[surface_axis],
     }
 }
