@@ -177,9 +177,25 @@ impl App {
                 self.editor
                     .adjust_selected_world_portal(&mut self.world.level, 0, 0, delta);
             }
-            EditorInspectorAction::PortalWidth(delta) => {
+            EditorInspectorAction::PortalScale(delta) => {
                 self.editor
-                    .adjust_selected_world_portal_width(&mut self.world.level, delta);
+                    .adjust_selected_world_portal_scale(&mut self.world.level, delta);
+            }
+            EditorInspectorAction::PortalSeamless => {
+                self.editor
+                    .toggle_selected_world_portal_seamless(&mut self.world.level);
+            }
+            EditorInspectorAction::PortalArea(delta) => {
+                self.editor
+                    .adjust_selected_world_portal_seamless_depth(&mut self.world.level, delta);
+            }
+            EditorInspectorAction::PortalAngle(delta) => {
+                self.editor
+                    .adjust_selected_world_portal_seamless_angle(&mut self.world.level, delta);
+            }
+            EditorInspectorAction::PortalWalls => {
+                self.editor
+                    .toggle_selected_world_portal_rely_on_walls(&mut self.world.level);
             }
         }
     }
@@ -296,7 +312,23 @@ fn editor_inspector_action_hit(
             })
             .or_else(|| {
                 editor_stepper_hit(pos, row_pos(226.0), row_width)
-                    .map(|direction| EditorInspectorAction::PortalWidth(8.0 * direction as f32))
+                    .map(|direction| EditorInspectorAction::PortalScale(0.1 * direction as f32))
+            })
+            .or_else(|| {
+                editor_toggle_hit(pos, row_pos(274.0), row_width)
+                    .then_some(EditorInspectorAction::PortalSeamless)
+            })
+            .or_else(|| {
+                editor_stepper_hit(pos, row_pos(322.0), row_width)
+                    .map(|direction| EditorInspectorAction::PortalArea(16.0 * direction as f32))
+            })
+            .or_else(|| {
+                editor_stepper_hit(pos, row_pos(370.0), row_width)
+                    .map(|direction| EditorInspectorAction::PortalAngle(15.0 * direction as f32))
+            })
+            .or_else(|| {
+                editor_toggle_hit(pos, row_pos(418.0), row_width)
+                    .then_some(EditorInspectorAction::PortalWalls)
             }),
         _ => None,
     }
@@ -326,7 +358,7 @@ fn editor_stepper_hit(pos: glam::Vec2, row_pos: glam::Vec2, row_width: f32) -> O
 }
 
 fn editor_inspector_layout(width: f32, height: f32) -> (glam::Vec2, glam::Vec2) {
-    let size = glam::Vec2::new((width * 0.24).clamp(300.0, 360.0), 276.0);
+    let size = glam::Vec2::new((width * 0.24).clamp(300.0, 360.0), 472.0);
     let pos = glam::Vec2::new(width - size.x - 92.0, height * 0.5 - size.y * 0.5);
 
     (pos, size)
@@ -349,7 +381,11 @@ enum EditorInspectorAction {
     PortalId(i16),
     PortalReceiver(i16),
     PortalPriority(i16),
-    PortalWidth(f32),
+    PortalScale(f32),
+    PortalSeamless,
+    PortalArea(f32),
+    PortalAngle(f32),
+    PortalWalls,
 }
 
 fn rect_hit(pos: glam::Vec2, rect_pos: glam::Vec2, rect_size: glam::Vec2) -> bool {

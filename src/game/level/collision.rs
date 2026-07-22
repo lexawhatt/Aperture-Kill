@@ -52,6 +52,28 @@ impl Level {
         self.try_uncrouch_player(player, portals);
     }
 
+    pub fn resolve_actor_body(&self, center: &mut Vec2, half_size: Vec2, vel: &mut Vec2) -> bool {
+        let mut on_ground = false;
+
+        for solid in self.solids.iter().copied() {
+            if let Some(correction) = body_solid_overlap(*center, half_size, solid) {
+                on_ground |= resolve_actor_push(center, vel, correction);
+            }
+        }
+
+        for door in &self.doors {
+            if !door.blocks_player() {
+                continue;
+            }
+
+            if let Some(correction) = body_solid_overlap(*center, half_size, door.moving_solid()) {
+                on_ground |= resolve_actor_push(center, vel, correction);
+            }
+        }
+
+        on_ground
+    }
+
     fn try_climb_step(
         &self,
         player: &mut Player,
@@ -135,6 +157,18 @@ fn resolve_body_push(player: &mut Player, correction: Vec2, was_on_ground: bool)
     } else if normal.x.abs() > 0.55 && !player.try_wall_slam(normal) {
         player.set_wall_contact_with_speed(-normal.x.signum(), incoming_speed);
     }
+}
+
+fn resolve_actor_push(center: &mut Vec2, vel: &mut Vec2, correction: Vec2) -> bool {
+    *center += correction;
+    let normal = correction.normalize_or_zero();
+    let into_surface = vel.dot(normal);
+
+    if into_surface < 0.0 {
+        *vel -= normal * into_surface;
+    }
+
+    normal.y < -0.55
 }
 
 fn portal_opens_collision(

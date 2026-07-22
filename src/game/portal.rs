@@ -162,6 +162,13 @@ impl Portal {
         )
     }
 
+    pub fn map_view_point_to(&self, destination: &Portal, point: Vec2) -> Vec2 {
+        let scale = self.object_scale_to(destination);
+        let destination_tangent = destination.oriented_tangent(self);
+
+        self.map_point_to(destination, point, scale, destination_tangent)
+    }
+
     pub fn opens_for_body(&self, center: Vec2, half_size: Vec2) -> bool {
         let offset = center - self.pos;
         let tangent_extent = projected_extent(half_size, self.tangent);
@@ -181,11 +188,7 @@ impl Portal {
     }
 
     pub fn active_width(&self) -> f32 {
-        positive_or(self.width, MIN_PORTAL_DIMENSION) * positive_or(self.scale, 1.0)
-    }
-
-    fn uses_scale(&self) -> bool {
-        self.scale_objects
+        positive_or(self.width, MIN_PORTAL_DIMENSION)
     }
 
     fn map_point_to(
@@ -212,11 +215,7 @@ impl Portal {
     }
 
     fn object_scale_to(&self, destination: &Portal) -> f32 {
-        if self.uses_scale() && destination.uses_scale() {
-            positive_or(destination.scale, 1.0) / positive_or(self.scale, 1.0)
-        } else {
-            1.0
-        }
+        positive_or(destination.scale, 1.0) / positive_or(self.scale, 1.0)
     }
 }
 

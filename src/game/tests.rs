@@ -669,6 +669,29 @@ fn teleport_through_rotated_portals_preserves_speed() {
 }
 
 #[test]
+fn portal_scale_uses_destination_over_source_ratio() {
+    let mut source = Portal::new(100.0, 100.0, Vec2::new(-1.0, 0.0), 80.0, Color::BLUE);
+    let mut destination = Portal::new(260.0, 100.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE);
+    let mut player = Player::new(99.0, 100.0);
+
+    source.scale = 1.0;
+    destination.scale = 2.0;
+    player.prev_pos = Vec2::new(101.0, 100.0);
+    source.teleport_player_to(&destination, &mut player);
+
+    assert_eq!(player.size, Vec2::new(PLAYER_SIZE.0, PLAYER_SIZE.1) * 2.0);
+
+    let mut reverse_player = Player::new(261.0, 100.0);
+    reverse_player.prev_pos = Vec2::new(259.0, 100.0);
+    destination.teleport_player_to(&source, &mut reverse_player);
+
+    assert_eq!(
+        reverse_player.size,
+        Vec2::new(PLAYER_SIZE.0, PLAYER_SIZE.1) * 0.5
+    );
+}
+
+#[test]
 fn world_portal_exit_from_rotated_block_preserves_momentum() {
     let ramp = Solid::rotated(520.0, 330.0, 180.0, 32.0, std::f32::consts::FRAC_PI_4, true);
     let ramp_surface = ramp.world_from_local(Vec2::new(ramp.size.x / 2.0, 0.0));
@@ -741,6 +764,50 @@ fn active_portal_opens_wall_collision() {
     level.resolve_player_with_portals(&mut player, &[portal]);
 
     assert_eq!(player.pos, Vec2::new(105.0, 50.0));
+}
+
+#[test]
+fn world_portal_opens_wall_collision() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(100.0, 0.0, 20.0, 120.0, true)],
+        world_portals: vec![
+            WorldPortal {
+                id: 1,
+                receiver_id: 2,
+                priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
+                portal: Portal::new(
+                    100.0 - PORTAL_SURFACE_OFFSET,
+                    50.0,
+                    Vec2::new(-1.0, 0.0),
+                    80.0,
+                    Color::BLUE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
+                portal: Portal::new(260.0, 50.0, Vec2::new(1.0, 0.0), 80.0, Color::ORANGE),
+            },
+        ],
+        ..Level::empty()
+    };
+    world.player = Player::new(105.0, 50.0);
+
+    world.update(0.0, &input, 900.0, 600.0);
+
+    assert_eq!(world.player.pos, Vec2::new(105.0, 50.0));
 }
 
 #[test]
@@ -1224,6 +1291,10 @@ fn world_portal_exit_supports_slide_air_slide() {
                 id: 1,
                 receiver_id: 2,
                 priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
                 portal: Portal::new(
                     100.0,
                     100.0,
@@ -1236,6 +1307,10 @@ fn world_portal_exit_supports_slide_air_slide() {
                 id: 2,
                 receiver_id: 1,
                 priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
                 portal: Portal::new(
                     260.0,
                     100.0,
@@ -1269,6 +1344,10 @@ fn world_portal_uses_highest_priority_receiver() {
                 id: 1,
                 receiver_id: 2,
                 priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
                 portal: Portal::new(
                     100.0,
                     100.0,
@@ -1281,6 +1360,10 @@ fn world_portal_uses_highest_priority_receiver() {
                 id: 2,
                 receiver_id: 1,
                 priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
                 portal: Portal::new(
                     260.0,
                     100.0,
@@ -1293,6 +1376,10 @@ fn world_portal_uses_highest_priority_receiver() {
                 id: 2,
                 receiver_id: 1,
                 priority: 10,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
                 portal: Portal::new(
                     420.0,
                     100.0,
@@ -1309,4 +1396,69 @@ fn world_portal_uses_highest_priority_receiver() {
     world.update(1.0 / 60.0, &input, 900.0, 600.0);
 
     assert!(world.player.pos.x > 390.0);
+}
+
+#[test]
+fn seamless_world_portal_requires_single_receiver() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        world_portals: vec![
+            WorldPortal {
+                id: 1,
+                receiver_id: 2,
+                priority: 0,
+                seamless: true,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
+                portal: Portal::new(
+                    100.0,
+                    100.0,
+                    Vec2::new(-1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::BLUE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 0,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
+                portal: Portal::new(
+                    260.0,
+                    100.0,
+                    Vec2::new(1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::ORANGE,
+                ),
+            },
+            WorldPortal {
+                id: 2,
+                receiver_id: 1,
+                priority: 10,
+                seamless: false,
+                seamless_depth: 256.0,
+                seamless_angle: 180.0,
+                seamless_rely_on_walls: false,
+                portal: Portal::new(
+                    420.0,
+                    100.0,
+                    Vec2::new(1.0, 0.0),
+                    PORTAL_WIDTH,
+                    Color::ORANGE,
+                ),
+            },
+        ],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 100.0);
+    world.player.vel = Vec2::new(-2400.0, 0.0);
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.player.pos.x < 130.0);
 }

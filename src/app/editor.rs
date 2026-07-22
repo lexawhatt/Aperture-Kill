@@ -6,12 +6,15 @@ use winit::keyboard::KeyCode;
 // Editor stores mode state and applies commands to level objects.
 use crate::constants::PORTAL_WIDTH;
 use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
+use crate::game::portal::Portal;
 
 use super::editor_geometry::{
     EditorDrag, EditorMoveStart, EditorSelection, SolidHit, drag_from_hit, rect_intersects_rect,
     resized_local_bounds, selection_rect, snap, snap_angle, snap_delta, solid_at,
     solid_intersects_rect, text_at, text_bounds,
 };
+
+const WORLD_PORTAL_EDIT_THICKNESS: f32 = 24.0;
 
 pub(super) struct Editor {
     selected: Vec<EditorSelection>,
@@ -243,7 +246,23 @@ impl Editor {
                 let Some(selection) = primary else {
                     return;
                 };
-                if let Some(solid) = Self::solid_like_mut(level, selection) {
+                if let EditorSelection::WorldPortal(index) = selection {
+                    if let Some(portal) = level.world_portals.get_mut(index) {
+                        let mut solid = world_portal_edit_solid(*portal);
+
+                        Self::resize_solid(
+                            &mut solid,
+                            pos,
+                            *edge_x,
+                            *edge_y,
+                            *start,
+                            *start_cursor,
+                            grid_snap,
+                        );
+                        apply_edit_solid_to_world_portal(portal, solid);
+                        self.dirty = true;
+                    }
+                } else if let Some(solid) = Self::solid_like_mut(level, selection) {
                     Self::resize_solid(
                         solid,
                         pos,
@@ -261,10 +280,27 @@ impl Editor {
                 center,
                 start_angle,
             } => {
-                let Some(EditorSelection::Solid(index)) = primary else {
+                let Some(selection) = primary else {
                     return;
                 };
-                if let Some(solid) = level.solids.get_mut(index) {
+                if let EditorSelection::WorldPortal(index) = selection {
+                    if let Some(portal) = level.world_portals.get_mut(index) {
+                        let mut solid = world_portal_edit_solid(*portal);
+
+                        Self::rotate_solid(
+                            &mut solid,
+                            pos,
+                            *start_rotation,
+                            *center,
+                            *start_angle,
+                            grid_snap,
+                        );
+                        apply_edit_solid_to_world_portal(portal, solid);
+                        self.dirty = true;
+                    }
+                } else if let EditorSelection::Solid(index) = selection
+                    && let Some(solid) = level.solids.get_mut(index)
+                {
                     Self::rotate_solid(
                         solid,
                         pos,
@@ -598,7 +634,7 @@ impl Editor {
         true
     }
 
-    pub(super) fn adjust_selected_world_portal_width(
+    pub(super) fn adjust_selected_world_portal_scale(
         &mut self,
         level: &mut Level,
         delta: f32,
@@ -612,7 +648,75 @@ impl Editor {
             return false;
         };
 
-        portal.portal.width = (portal.portal.width + delta).clamp(24.0, 512.0);
+        portal.portal.scale = (portal.portal.scale + delta).clamp(0.25, 4.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn toggle_selected_world_portal_seamless(&mut self, level: &mut Level) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.seamless = !portal.seamless;
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_world_portal_seamless_depth(
+        &mut self,
+        level: &mut Level,
+        delta: f32,
+    ) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.seamless_depth = (portal.seamless_depth + delta).clamp(16.0, 4096.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_world_portal_seamless_angle(
+        &mut self,
+        level: &mut Level,
+        delta: f32,
+    ) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.seamless_angle = (portal.seamless_angle + delta).clamp(5.0, 360.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn toggle_selected_world_portal_rely_on_walls(&mut self, level: &mut Level) -> bool {
+        let Some(EditorSelection::WorldPortal(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(portal) = level.world_portals.get_mut(index) else {
+            return false;
+        };
+
+        portal.seamless_rely_on_walls = !portal.seamless_rely_on_walls;
         self.dirty = true;
         true
     }
@@ -820,14 +924,18 @@ impl Editor {
             return Some((EditorSelection::Text(index), SolidHit::Body));
         }
 
-        if let Some((index, _)) = level
-            .world_portals
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, portal)| world_portal_at(pos, **portal))
+        if let Some((index, hit)) =
+            level
+                .world_portals
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, portal)| {
+                    solid_at(pos, world_portal_edit_solid(*portal), self.rotate_ui)
+                        .map(|hit| (index, hit))
+                })
         {
-            return Some((EditorSelection::WorldPortal(index), SolidHit::Body));
+            return Some((EditorSelection::WorldPortal(index), hit));
         }
 
         if let Some((index, hit)) = level
@@ -920,9 +1028,7 @@ impl Editor {
                 .world_portals
                 .get(index)
                 .copied()
-                .map(|portal| EditorDrag::Move {
-                    grab: pos - portal.center(),
-                })
+                .map(|portal| drag_from_hit(hit, pos, world_portal_edit_solid(portal)))
                 .unwrap_or(EditorDrag::None),
         }
     }
@@ -1441,25 +1547,50 @@ fn include_solid_bounds(solid: Solid, min: &mut Vec2, max: &mut Vec2) {
     }
 }
 
-fn world_portal_at(pos: Vec2, portal: WorldPortal) -> bool {
-    let (a, b) = portal.portal.endpoints();
-    distance_to_segment(pos, a, b) <= 10.0
-}
-
 fn world_portal_bounds(portal: WorldPortal) -> (Vec2, Vec2) {
-    let (a, b) = portal.portal.endpoints();
-    let min = a.min(b) - Vec2::splat(10.0);
-    let max = a.max(b) + Vec2::splat(10.0);
+    let corners = world_portal_edit_solid(portal).corners();
+    let min = corners
+        .iter()
+        .copied()
+        .reduce(Vec2::min)
+        .unwrap_or(portal.center());
+    let max = corners
+        .iter()
+        .copied()
+        .reduce(Vec2::max)
+        .unwrap_or(portal.center());
 
     (min, max)
 }
 
-fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let ab = b - a;
-    let t = (point - a).dot(ab) / ab.length_squared().max(1.0);
-    let closest = a + ab * t.clamp(0.0, 1.0);
+fn world_portal_edit_solid(portal: WorldPortal) -> Solid {
+    let width = portal.portal.active_width().max(24.0);
+    let size = Vec2::new(width, WORLD_PORTAL_EDIT_THICKNESS);
+    let center = portal.center();
 
-    point.distance(closest)
+    Solid::rotated(
+        center.x - size.x / 2.0,
+        center.y - size.y / 2.0,
+        size.x,
+        size.y,
+        portal.portal.tangent().to_angle(),
+        false,
+    )
+}
+
+fn apply_edit_solid_to_world_portal(portal: &mut WorldPortal, solid: Solid) {
+    let mut edited = Portal::with_tangent(
+        solid.center().x,
+        solid.center().y,
+        -solid.axis_y(),
+        solid.axis_x(),
+        solid.size.x.max(24.0),
+        portal.portal.color,
+    );
+
+    edited.scale = portal.portal.scale;
+    edited.scale_objects = portal.portal.scale_objects;
+    portal.portal = edited;
 }
 
 fn offset_u16(value: u16, delta: i16) -> u16 {

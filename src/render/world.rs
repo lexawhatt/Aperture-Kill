@@ -1,13 +1,38 @@
 use glam::Vec2;
 
 // World drawing uses camera-transformed coordinates.
-use crate::game::level::{Checkpoint, Door, Hazard, Solid};
+use crate::constants::PORTAL_SURFACE_OFFSET;
+use crate::game::enemy::{Enemy, EnemyKind};
+use crate::game::level::{Checkpoint, Door, Hazard, Solid, WorldPortal};
 use crate::game::portal::{Color, Portal};
+use crate::game::{PiercerBeam, World};
 
-use super::canvas::{Canvas, Rect};
+use super::canvas::{Canvas, Rect, WorldClip};
+
+const SEAMLESS_CUT_EPSILON: f32 = 2.0;
 
 impl Canvas<'_> {
     pub(super) fn solid(&mut self, solid: Solid, fill: Color, outline: Color) {
+        self.solid_with_holes(solid, fill, outline, &[]);
+    }
+
+    pub(super) fn solid_with_seamless_holes(
+        &mut self,
+        solid: Solid,
+        fill: Color,
+        outline: Color,
+        portals: &[WorldPortal],
+    ) {
+        self.solid_with_holes(solid, fill, outline, portals);
+    }
+
+    fn solid_with_holes(
+        &mut self,
+        solid: Solid,
+        fill: Color,
+        outline: Color,
+        portals: &[WorldPortal],
+    ) {
         let corners = solid.corners().map(|corner| self.world_to_screen(corner));
         let (min, max) = corners.into_iter().fold(
             (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
@@ -21,7 +46,8 @@ impl Canvas<'_> {
         for yy in y0..y1 {
             for xx in x0..x1 {
                 let point = self.screen_to_world(Vec2::new(xx as f32 + 0.5, yy as f32 + 0.5));
-                if solid.contains_point(point) {
+                if solid.contains_point(point) && !seamless_portal_cuts_solid(point, solid, portals)
+                {
                     self.put_px(xx, yy, fill);
                 }
             }
@@ -100,6 +126,68 @@ impl Canvas<'_> {
         );
     }
 
+    pub(super) fn enemy(&mut self, enemy: &Enemy) {
+        match enemy.kind {
+            EnemyKind::Filth => self.filth(enemy),
+        }
+    }
+
+    fn filth(&mut self, enemy: &Enemy) {
+        let solid = enemy.solid();
+        let flash = enemy.hurt_flash > 0.0;
+        let fill = if flash {
+            Color::rgb(255, 235, 235)
+        } else {
+            Color::rgb(112, 20, 24)
+        };
+        let outline = if flash {
+            Color::rgb(255, 64, 64)
+        } else {
+            Color::rgb(255, 48, 38)
+        };
+        let center = solid.center();
+
+        self.solid(solid, fill, outline);
+        self.draw_world_line(
+            center + Vec2::new(-solid.size.x * 0.32, -solid.size.y * 0.12),
+            center + Vec2::new(solid.size.x * 0.32, -solid.size.y * 0.12),
+            Color::rgb(20, 5, 5),
+        );
+        self.fill_world_rect(
+            Rect {
+                pos: center + Vec2::new(-11.0, -15.0),
+                size: Vec2::new(6.0, 6.0),
+            },
+            Color::rgb(255, 220, 120),
+        );
+        self.fill_world_rect(
+            Rect {
+                pos: center + Vec2::new(5.0, -15.0),
+                size: Vec2::new(6.0, 6.0),
+            },
+            Color::rgb(255, 220, 120),
+        );
+    }
+
+    pub(super) fn piercer_beam(&mut self, beam: PiercerBeam) {
+        let color = if beam.charged {
+            Color::rgb(39, 221, 255)
+        } else {
+            Color::rgb(255, 226, 80)
+        };
+        let bloom = if beam.charged {
+            Color::rgb(9, 86, 98)
+        } else {
+            Color::rgb(255, 130, 40)
+        };
+        let normal = (beam.end - beam.start).normalize_or_zero();
+        let side = Vec2::new(-normal.y, normal.x);
+
+        self.draw_world_line(beam.start + side * 2.0, beam.end + side * 2.0, bloom);
+        self.draw_world_line(beam.start - side * 2.0, beam.end - side * 2.0, bloom);
+        self.draw_world_line(beam.start, beam.end, color);
+    }
+
     pub(super) fn player_rect(&mut self, rect: Rect, fill: Color, outline: Color) {
         self.fill_world_rect(rect, fill);
         self.world_rect_outline(rect, outline);
@@ -127,6 +215,135 @@ impl Canvas<'_> {
             };
 
             self.player_rect(mapped, fill, outline);
+        }
+    }
+
+    pub(super) fn seamless_portal_views(&mut self, world: &World) {
+        for (source_index, source) in world.level.world_portals.iter().enumerate() {
+            if !source.seamless {
+                continue;
+            }
+            let Some(destination_index) =
+                seamless_receiver_index(&world.level.world_portals, source_index)
+            else {
+                continue;
+            };
+            let Some(destination) = world.level.world_portals.get(destination_index) else {
+                continue;
+            };
+
+            self.seamless_portal_view(world, *source, *destination);
+        }
+    }
+
+    fn seamless_portal_view(
+        &mut self,
+        world: &World,
+        source: WorldPortal,
+        destination: WorldPortal,
+    ) {
+        let previous_clip = self.replace_clip(Some(WorldClip::behind_portal(
+            source.portal.pos,
+            source.portal.normal(),
+            source.seamless_depth,
+            source.seamless_angle,
+            seamless_occluding_walls(world, source),
+        )));
+
+        self.transformed_world(world, destination.portal, source.portal);
+        self.replace_clip(previous_clip);
+    }
+
+    fn transformed_world(&mut self, world: &World, from: Portal, to: Portal) {
+        for solid in &world.level.solids {
+            let Some(solid) = transformed_solid(from, to, *solid) else {
+                continue;
+            };
+            let fill = if solid.portalable {
+                Color::rgb(36, 42, 53)
+            } else {
+                Color::rgb(55, 45, 47)
+            };
+
+            self.solid(solid, fill, Color::rgb(92, 105, 125));
+        }
+
+        for door in &world.level.doors {
+            let Some(solid) = transformed_solid(from, to, door.solid) else {
+                continue;
+            };
+            let mut door = *door;
+
+            door.solid = solid;
+            self.door(door);
+        }
+
+        for hazard in &world.level.hazards {
+            if let Some(solid) = transformed_solid(from, to, hazard.solid) {
+                self.hazard(Hazard { solid });
+            }
+        }
+
+        for checkpoint in &world.level.checkpoints {
+            if let Some(solid) = transformed_solid(from, to, checkpoint.solid) {
+                self.checkpoint(Checkpoint { solid });
+            }
+        }
+
+        for text in &world.level.texts {
+            self.world_text(
+                from.map_view_point_to(&to, text.pos),
+                &text.text,
+                2,
+                Color::rgb(210, 218, 230),
+            );
+        }
+
+        for portal in &world.level.world_portals {
+            if portal.seamless {
+                continue;
+            }
+
+            let a = from.map_view_point_to(&to, portal.portal.endpoints().0);
+            let b = from.map_view_point_to(&to, portal.portal.endpoints().1);
+            let center = from.map_view_point_to(&to, portal.portal.pos);
+            let normal_end =
+                from.map_view_point_to(&to, portal.portal.pos + portal.portal.normal() * 16.0);
+
+            self.draw_world_line(a, b, portal.portal.color);
+            self.draw_world_line(center, normal_end, portal.portal.color);
+        }
+
+        for portal in world.portals.iter().flatten() {
+            let a = from.map_view_point_to(&to, portal.endpoints().0);
+            let b = from.map_view_point_to(&to, portal.endpoints().1);
+            let center = from.map_view_point_to(&to, portal.pos);
+            let normal_end = from.map_view_point_to(&to, portal.pos + portal.normal() * 16.0);
+
+            self.draw_world_line(a, b, portal.color);
+            self.draw_world_line(center, normal_end, portal.color);
+        }
+
+        let player = &world.player;
+        let player_solid = Solid::new(
+            player.pos.x - player.half_size().x,
+            player.pos.y - player.half_size().y,
+            player.size.x,
+            player.size.y,
+            false,
+        );
+        if let Some(player_solid) = transformed_solid(from, to, player_solid) {
+            let fill = if player.is_ground_slamming() {
+                Color::rgb(255, 224, 102)
+            } else if player.is_dashing() {
+                Color::rgb(80, 92, 130)
+            } else if player.is_wall_sliding() {
+                Color::rgb(62, 76, 92)
+            } else {
+                Color::rgb(45, 49, 59)
+            };
+
+            self.solid(player_solid, fill, Color::rgb(235, 238, 245));
         }
     }
 
@@ -240,6 +457,101 @@ impl Canvas<'_> {
             );
         }
     }
+}
+
+fn seamless_receiver_index(portals: &[WorldPortal], source_index: usize) -> Option<usize> {
+    let source = portals.get(source_index)?;
+    let mut receivers = portals
+        .iter()
+        .enumerate()
+        .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
+        .map(|(index, _)| index);
+    let receiver = receivers.next()?;
+
+    receivers.next().is_none().then_some(receiver)
+}
+
+fn transformed_solid(from: Portal, to: Portal, solid: Solid) -> Option<Solid> {
+    let p0 = from.map_view_point_to(&to, solid.world_from_local(Vec2::ZERO));
+    let p1 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(solid.size.x, 0.0)));
+    let p2 = from.map_view_point_to(&to, solid.world_from_local(solid.size));
+    let p3 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(0.0, solid.size.y)));
+    let axis_x = p1 - p0;
+    let axis_y = p3 - p0;
+    let width = axis_x.length();
+    let height = axis_y.length();
+
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    let center = (p0 + p2) / 2.0;
+    let rotation = axis_x.to_angle();
+
+    Some(Solid::rotated(
+        center.x - width / 2.0,
+        center.y - height / 2.0,
+        width,
+        height,
+        rotation,
+        solid.portalable,
+    ))
+}
+
+fn seamless_portal_cuts_solid(point: Vec2, solid: Solid, portals: &[WorldPortal]) -> bool {
+    portals.iter().any(|world_portal| {
+        if !world_portal.seamless || !portal_sits_on_solid(world_portal.portal, solid) {
+            return false;
+        }
+
+        let portal = world_portal.portal;
+        let offset = point - portal.pos;
+        let tangent_distance = offset.dot(portal.tangent()).abs();
+        let normal_distance = offset.dot(portal.normal());
+
+        tangent_distance <= portal.active_width() / 2.0 + SEAMLESS_CUT_EPSILON
+            && normal_distance <= PORTAL_SURFACE_OFFSET + SEAMLESS_CUT_EPSILON
+            && normal_distance >= -world_portal.seamless_depth
+    })
+}
+
+fn seamless_occluding_walls(world: &World, source: WorldPortal) -> Vec<Solid> {
+    if !source.seamless_rely_on_walls {
+        return Vec::new();
+    }
+
+    world
+        .level
+        .solids
+        .iter()
+        .copied()
+        .filter(|solid| !portal_sits_on_solid(source.portal, *solid))
+        .collect()
+}
+
+fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
+    let normal = portal.normal();
+    let surface_pos = portal.pos - normal * PORTAL_SURFACE_OFFSET;
+    let local = solid.local_from_world(surface_pos);
+    let axis_x = solid.axis_x();
+    let axis_y = solid.axis_y();
+
+    if local.x >= -SEAMLESS_CUT_EPSILON
+        && local.y >= -SEAMLESS_CUT_EPSILON
+        && local.x <= solid.size.x + SEAMLESS_CUT_EPSILON
+        && local.y <= solid.size.y + SEAMLESS_CUT_EPSILON
+    {
+        let on_left = local.x.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_x) > 0.95;
+        let on_right =
+            (local.x - solid.size.x).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_x) > 0.95;
+        let on_top = local.y.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_y) > 0.95;
+        let on_bottom =
+            (local.y - solid.size.y).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_y) > 0.95;
+
+        return on_left || on_right || on_top || on_bottom;
+    }
+
+    false
 }
 
 fn rect_on_portal_side(rect: Rect, portal: Portal, outside: bool) -> Option<Rect> {

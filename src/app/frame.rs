@@ -64,6 +64,7 @@ impl App {
         for event in self.world.drain_sound_events() {
             self.audio.play(event, listener);
         }
+        self.camera.center += self.world.take_camera_shift();
         self.camera.follow(self.world.player.pos, dt);
         self.refresh_cursor_world_for(width, height);
         self.input.set_aim_pos(self.cursor_world);
@@ -100,8 +101,16 @@ impl App {
         };
         let renderer = &self.renderer;
         let world = &self.world;
-        let camera = self.camera.center;
-        let zoom = self.camera.zoom;
+        let camera = self
+            .world
+            .death
+            .map(|death| self.camera.center + death.camera_offset())
+            .unwrap_or(self.camera.center);
+        let zoom = self
+            .world
+            .death
+            .map(|death| self.camera.zoom * death.camera_zoom())
+            .unwrap_or(self.camera.zoom);
         let debug = self.debug_overlay();
         let fps = self.settings.show_fps.then_some(self.fps);
         let Some(surface) = self.surface.as_mut() else {
@@ -162,7 +171,11 @@ impl App {
                         id: portal.id,
                         receiver_id: portal.receiver_id,
                         priority: portal.priority,
-                        width: portal.portal.width,
+                        scale: portal.portal.scale,
+                        seamless: portal.seamless,
+                        seamless_depth: portal.seamless_depth,
+                        seamless_angle: portal.seamless_angle,
+                        seamless_rely_on_walls: portal.seamless_rely_on_walls,
                     })
                 })
                 .unwrap_or(EditorInspector::None),

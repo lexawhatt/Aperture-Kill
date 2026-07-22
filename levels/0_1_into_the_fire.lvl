@@ -1,0 +1,51 @@
+name 0-1 INTO THE FIRE
+player -192 208
+solid -960 520 640 48 false 0
+solid -960 -80 48 648 false 0
+solid -320 -80 48 648 false 0
+solid -960 -80 688 48 false 0
+solid -792 392 144 24 false 0
+solid -600 304 144 24 false 0
+solid -440 216 120 24 false 0
+solid -272 520 1184 48 false 0
+solid -272 104 48 464 false 0
+solid -272 104 1184 48 false 0
+solid 48 408 144 24 false 0
+solid 288 336 144 24 false 0
+solid 560 264 144 24 false 0
+solid 912 520 912 48 false 0
+solid 912 -120 912 48 false 0
+solid 1136 392 160 24 false 0
+solid 1456 320 160 24 false 0
+solid 1824 520 928 48 false 0
+solid 1824 -392 928 48 false 0
+solid 2208 272 128 24 false 0
+solid 2432 168 128 24 false 0
+solid 2752 520 864 48 false 0
+solid 3568 40 48 528 false 0
+solid 2752 40 864 48 false 0
+solid 2960 416 144 24 false 0
+solid 3200 320 144 24 false 0
+solid 3408 224 144 24 false 0
+solid -240 272 96 32 false 0
+door -320 400 48 120 144 0 3.6 true
+hazard 120 544 664 32 0
+hazard 1896 544 760 32 0
+hazard 2816 544 704 32 0
+checkpoint -792 440 48 80
+checkpoint 1040 440 48 80
+checkpoint 2864 440 48 80
+enemy filth 977 491
+enemy filth 977 491
+enemy filth 1889 491
+enemy filth 1889 491
+enemy filth 1889 491
+enemy filth 2817 491
+enemy filth 2817 491
+enemy filth 2817 491
+text -856 456 REVOLVER ONLINE
+text -668 264 LEFT MOUSE FIRE
+text -504 176 RIGHT MOUSE CHARGE
+text 80 368 FILTH
+text 1056 352 GLASSWAY
+text 2960 376 INTO THE FIRE

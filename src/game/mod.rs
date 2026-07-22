@@ -1,3 +1,4 @@
+pub mod enemy;
 pub mod geometry;
 pub mod level;
 pub mod levels;
@@ -8,7 +9,12 @@ pub mod portal;
 #[cfg(test)]
 mod tests;
 
-use crate::constants::{PORTAL_MIN_DISTANCE, PORTAL_WIDTH};
+use crate::constants::{
+    PIERCE_ALT_CHARGE_TIME, PIERCE_ALT_COOLDOWN, PIERCE_ALT_DAMAGE, PIERCE_BEAM_TIME,
+    PIERCE_PRIMARY_COOLDOWN, PIERCE_PRIMARY_DAMAGE, PIERCE_RANGE, PLAYER_DAMAGE_PULSE_TIME,
+    PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
+    PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_WIDTH,
+};
 use crate::game::level::{DoorEvent, Level};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
@@ -18,16 +24,22 @@ use crate::platform::input::{GameKey, Input};
 const MAX_STEP_DISTANCE: f32 = 8.0;
 const MAX_PHYSICS_STEPS: usize = 96;
 const FOOTSTEP_MIN_SPEED: f32 = 70.0;
+const WORLD_PORTAL_COOLDOWN_STEPS: u8 = 2;
 
 pub struct World {
     pub level: Level,
     pub player: Player,
     pub portals: [Option<Portal>; 2],
+    pub piercer: PiercerState,
+    pub death: Option<DeathSequence>,
+    pub damage_pulse: DamagePulse,
     respawn_pos: glam::Vec2,
     sound_events: Vec<SoundEvent>,
     door_events: Vec<(usize, DoorEvent)>,
     footstep_timer: f32,
     footstep_index: usize,
+    camera_shift: glam::Vec2,
+    world_portal_cooldown: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +59,149 @@ pub enum SoundEvent {
     HeavyLand(glam::Vec2),
     PortalFire(glam::Vec2),
     PortalPlace(glam::Vec2),
+    PlayerHurt(glam::Vec2),
+    DeathSequence,
+    DeathSkull,
+    DeathStop,
+    FilthBite(glam::Vec2),
+    PiercerChargeStart(glam::Vec2),
+    PiercerChargeStop,
+    PiercerFire(glam::Vec2),
+    PiercerCharged(glam::Vec2),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeaponSlot {
+    Piercer,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PiercerState {
+    pub selected: WeaponSlot,
+    pub primary_cooldown: f32,
+    pub alt_cooldown: f32,
+    pub alt_charge: f32,
+    pub alt_charging: bool,
+    pub beam: Option<PiercerBeam>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PiercerBeam {
+    pub start: glam::Vec2,
+    pub end: glam::Vec2,
+    pub charged: bool,
+    pub time: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DeathSequence {
+    pub timer: f32,
+    pub text_chars: usize,
+    pub skull_frame: usize,
+    laugh_loop_timer: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DamagePulse {
+    pub timer: f32,
+    pub strength: f32,
+}
+
+impl PiercerState {
+    fn new() -> Self {
+        Self {
+            selected: WeaponSlot::Piercer,
+            primary_cooldown: 0.0,
+            alt_cooldown: 0.0,
+            alt_charge: 0.0,
+            alt_charging: false,
+            beam: None,
+        }
+    }
+
+    fn tick(&mut self, dt: f32) {
+        self.primary_cooldown = (self.primary_cooldown - dt).max(0.0);
+        self.alt_cooldown = (self.alt_cooldown - dt).max(0.0);
+        if self.alt_charging {
+            self.alt_charge += dt;
+        }
+        if let Some(beam) = &mut self.beam {
+            beam.time -= dt;
+            if beam.time <= 0.0 {
+                self.beam = None;
+            }
+        }
+    }
+}
+
+impl DeathSequence {
+    fn new() -> Self {
+        Self {
+            timer: 0.0,
+            text_chars: 0,
+            skull_frame: 0,
+            laugh_loop_timer: 0.0,
+        }
+    }
+
+    pub fn prompt_ready(self) -> bool {
+        self.timer >= PLAYER_DEATH_PROMPT_TIME
+    }
+
+    pub fn camera_offset(self) -> glam::Vec2 {
+        if self.prompt_ready() {
+            return glam::Vec2::ZERO;
+        }
+
+        let t = (self.timer / PLAYER_DEATH_PROMPT_TIME).clamp(0.0, 1.0);
+        let collapse = t.powf(2.15);
+        let late = ((t - 0.62) / 0.38).clamp(0.0, 1.0);
+        let x = (self.timer * 4.2).sin() * 5.0 * (0.35 + late * 0.65);
+        let y = collapse * 210.0 + (self.timer * 6.0).sin().max(0.0) * late * 8.0;
+
+        glam::Vec2::new(x, y)
+    }
+
+    pub fn camera_zoom(self) -> f32 {
+        if self.prompt_ready() {
+            return 1.0;
+        }
+
+        let t = (self.timer / PLAYER_DEATH_PROMPT_TIME).clamp(0.0, 1.0);
+        1.0 + t * 0.025
+    }
+}
+
+impl DamagePulse {
+    fn new() -> Self {
+        Self {
+            timer: 0.0,
+            strength: 0.0,
+        }
+    }
+
+    fn trigger(&mut self, damage: f32) {
+        self.timer = PLAYER_DAMAGE_PULSE_TIME;
+        self.strength = (0.28 + damage / PLAYER_MAX_HEALTH * 1.15).clamp(0.32, 0.95);
+    }
+
+    fn tick(&mut self, dt: f32) {
+        self.timer = (self.timer - dt).max(0.0);
+        if self.timer == 0.0 {
+            self.strength = 0.0;
+        }
+    }
+
+    pub fn amount(self) -> f32 {
+        if self.timer <= 0.0 {
+            return 0.0;
+        }
+
+        let t = 1.0 - (self.timer / PLAYER_DAMAGE_PULSE_TIME).clamp(0.0, 1.0);
+        let attack = (t / 0.18).clamp(0.0, 1.0);
+        let release = (1.0 - t).powf(1.85);
+        self.strength * attack * release
+    }
 }
 
 impl World {
@@ -60,11 +215,16 @@ impl World {
             level: level.level(),
             player: Player::new(level.spawn.x, level.spawn.y),
             portals: [None, None],
+            piercer: PiercerState::new(),
+            death: None,
+            damage_pulse: DamagePulse::new(),
             respawn_pos: level.spawn,
             sound_events: Vec::new(),
             door_events: Vec::new(),
             footstep_timer: 0.0,
             footstep_index: 0,
+            camera_shift: glam::Vec2::ZERO,
+            world_portal_cooldown: 0,
         }
     }
 
@@ -72,15 +232,26 @@ impl World {
         self.level = level.level();
         self.player = Player::new(level.spawn.x, level.spawn.y);
         self.portals = [None, None];
+        self.piercer = PiercerState::new();
+        self.death = None;
+        self.damage_pulse = DamagePulse::new();
         self.respawn_pos = level.spawn;
         self.sound_events.clear();
         self.door_events.clear();
         self.footstep_timer = 0.0;
         self.footstep_index = 0;
+        self.camera_shift = glam::Vec2::ZERO;
+        self.world_portal_cooldown = 0;
     }
 
     pub fn update(&mut self, dt: f32, input: &Input, _screen_width: f32, _screen_height: f32) {
         self.sound_events.clear();
+        self.damage_pulse.tick(dt);
+        if self.update_death(dt, input) {
+            return;
+        }
+
+        self.piercer.tick(dt);
         let distance = (self.player.vel.length() * dt).max(1.0);
         // Long frames are subdivided so a fast player cannot tunnel through thin geometry.
         let steps = ((distance / MAX_STEP_DISTANCE).ceil() as usize).clamp(1, MAX_PHYSICS_STEPS);
@@ -94,11 +265,13 @@ impl World {
             self.tick_doors(step_dt);
             self.try_teleport(MovementInput::from(&step_input));
             self.resolve_player();
+            self.tick_enemies(step_dt);
             self.check_level_triggers();
             self.collect_player_events();
             self.tick_footsteps(step_dt);
 
             if step == 0 {
+                self.update_weapons(&step_input);
                 self.shoot_portals(&step_input);
                 step_input.consume_presses();
             }
@@ -107,6 +280,10 @@ impl World {
 
     pub fn drain_sound_events(&mut self) -> impl Iterator<Item = SoundEvent> + '_ {
         self.sound_events.drain(..)
+    }
+
+    pub fn take_camera_shift(&mut self) -> glam::Vec2 {
+        std::mem::take(&mut self.camera_shift)
     }
 
     fn tick_doors(&mut self, dt: f32) {
@@ -135,6 +312,95 @@ impl World {
                 .push(SoundEvent::PortalFire(self.player.pos));
             self.place_portal(1, Color::ORANGE);
         }
+    }
+
+    fn update_weapons(&mut self, input: &Input) {
+        if input.weapon_1_pressed() {
+            self.piercer.selected = WeaponSlot::Piercer;
+        }
+        if self.piercer.selected != WeaponSlot::Piercer {
+            return;
+        }
+
+        if self.piercer.alt_charging {
+            if self.piercer.alt_charge >= PIERCE_ALT_CHARGE_TIME && input.primary_fire_pressed() {
+                self.finish_piercer_charge(true);
+            } else if input.alt_fire_released() {
+                let charged = self.piercer.alt_charge >= PIERCE_ALT_CHARGE_TIME;
+                self.finish_piercer_charge(charged);
+            }
+            return;
+        }
+
+        if input.primary_fire_down() && self.piercer.primary_cooldown <= 0.0 {
+            self.fire_piercer(false);
+            self.piercer.primary_cooldown = PIERCE_PRIMARY_COOLDOWN;
+        }
+
+        if input.alt_fire_down() && self.piercer.alt_cooldown <= 0.0 && !self.piercer.alt_charging {
+            self.piercer.alt_charging = true;
+            self.sound_events
+                .push(SoundEvent::PiercerChargeStart(self.player.aim_from()));
+        }
+    }
+
+    fn finish_piercer_charge(&mut self, charged: bool) {
+        self.piercer.alt_charging = false;
+        self.piercer.alt_charge = 0.0;
+        self.sound_events.push(SoundEvent::PiercerChargeStop);
+
+        if charged {
+            self.fire_piercer(true);
+            self.piercer.alt_cooldown = PIERCE_ALT_COOLDOWN;
+        }
+    }
+
+    fn fire_piercer(&mut self, charged: bool) {
+        let origin = self.player.aim_from();
+        let aim = self.player.aim_pos - origin;
+        if aim.length_squared() <= 1.0 {
+            return;
+        }
+
+        let dir = aim.normalize();
+        let max_end = origin + dir * PIERCE_RANGE;
+        let wall_hit = self
+            .level
+            .raycast_any_solid(origin, max_end)
+            .map(|hit| hit.point);
+        let wall_distance = wall_hit
+            .map(|point| point.distance(origin))
+            .unwrap_or(PIERCE_RANGE);
+        let damage = if charged {
+            PIERCE_ALT_DAMAGE
+        } else {
+            PIERCE_PRIMARY_DAMAGE
+        };
+
+        for enemy in &mut self.level.enemies {
+            let Some(distance) =
+                ray_hits_enemy(origin, dir, wall_distance, enemy.pos, enemy.half_size())
+            else {
+                continue;
+            };
+            if distance <= wall_distance && enemy.damage(damage) && !charged {
+                break;
+            }
+        }
+        self.level.enemies.retain(|enemy| enemy.health > 0.0);
+
+        let end = wall_hit.unwrap_or(max_end);
+        self.piercer.beam = Some(PiercerBeam {
+            start: origin,
+            end,
+            charged,
+            time: PIERCE_BEAM_TIME,
+        });
+        self.sound_events.push(if charged {
+            SoundEvent::PiercerCharged(origin)
+        } else {
+            SoundEvent::PiercerFire(origin)
+        });
     }
 
     fn place_portal(&mut self, index: usize, color: Color) {
@@ -213,7 +479,16 @@ impl World {
             false
         };
 
-        used_player_portal || self.try_world_portal_teleport(input)
+        if used_player_portal {
+            return true;
+        }
+
+        if self.world_portal_cooldown > 0 {
+            self.world_portal_cooldown -= 1;
+            return false;
+        }
+
+        self.try_world_portal_teleport(input)
     }
 
     fn try_world_portal_teleport(&mut self, input: MovementInput) -> bool {
@@ -242,19 +517,40 @@ impl World {
         };
         let source = portals[source_index].portal;
         let destination = portals[destination_index].portal;
+        let camera_before = self.player.pos;
 
         source.teleport_player_to(&destination, &mut self.player);
+        self.camera_shift += self.player.pos - camera_before;
+        self.world_portal_cooldown = WORLD_PORTAL_COOLDOWN_STEPS;
         self.player
             .on_player_portal_exit(destination.normal(), input);
         true
     }
 
     fn resolve_player(&mut self) {
-        if let [Some(source), Some(destination)] = self.portals {
+        let world_portals =
             self.level
-                .resolve_player_with_portals(&mut self.player, &[source, destination]);
+                .world_portals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, portal)| {
+                    world_portal_receiver_index(&self.level.world_portals, index)
+                        .map(|_| portal.portal)
+                });
+
+        if let [Some(source), Some(destination)] = self.portals {
+            let portals = [source, destination]
+                .into_iter()
+                .chain(world_portals)
+                .collect::<Vec<_>>();
+
+            self.level
+                .resolve_player_with_portals(&mut self.player, &portals);
         } else {
-            self.level.resolve_player(&mut self.player);
+            let portals = world_portals.collect::<Vec<_>>();
+
+            self.level
+                .resolve_player_with_portals(&mut self.player, &portals);
         }
     }
 
@@ -298,6 +594,83 @@ impl World {
         self.footstep_timer = 0.22;
     }
 
+    fn tick_enemies(&mut self, dt: f32) {
+        let player_pos = self.player.pos;
+        let mut damage = 0.0;
+        let level_view = Level {
+            solids: self.level.solids.clone(),
+            doors: self.level.doors.clone(),
+            hazards: Vec::new(),
+            checkpoints: Vec::new(),
+            enemies: Vec::new(),
+            texts: Vec::new(),
+            world_portals: Vec::new(),
+        };
+
+        for enemy in &mut self.level.enemies {
+            if let Some(amount) = enemy.update(dt, player_pos, &level_view) {
+                damage += amount;
+                self.sound_events.push(SoundEvent::FilthBite(enemy.pos));
+            }
+        }
+
+        if damage > 0.0 {
+            let health_before = self.player.health;
+            let killed = self.player.damage(damage);
+
+            if self.player.health < health_before {
+                let applied_damage = health_before - self.player.health;
+                self.sound_events
+                    .push(SoundEvent::PlayerHurt(self.player.pos));
+                self.damage_pulse.trigger(applied_damage);
+            }
+
+            if killed {
+                self.start_death_sequence();
+            }
+        }
+    }
+
+    fn update_death(&mut self, dt: f32, input: &Input) -> bool {
+        let Some(death) = &mut self.death else {
+            return false;
+        };
+
+        death.timer += dt;
+        death.text_chars = (death.timer / PLAYER_DEATH_TEXT_RATE) as usize;
+        if death.prompt_ready() {
+            death.laugh_loop_timer -= dt;
+        }
+        if death.prompt_ready() && death.laugh_loop_timer <= 0.0 {
+            death.laugh_loop_timer = PLAYER_DEATH_LAUGH_LOOP_TIME;
+            death.skull_frame = 1;
+            self.sound_events.push(SoundEvent::DeathSkull);
+        } else if death.prompt_ready()
+            && death.laugh_loop_timer <= PLAYER_DEATH_LAUGH_LOOP_TIME * 0.35
+        {
+            death.skull_frame = 0;
+        }
+
+        let should_respawn = input.respawn_pressed();
+
+        if should_respawn {
+            self.respawn_player();
+        }
+
+        true
+    }
+
+    fn start_death_sequence(&mut self) {
+        if self.death.is_some() {
+            return;
+        }
+
+        self.death = Some(DeathSequence::new());
+        self.piercer.alt_charging = false;
+        self.piercer.beam = None;
+        self.sound_events.push(SoundEvent::DeathSequence);
+    }
+
     fn check_level_triggers(&mut self) {
         let center = self.player.pos;
         let half_size = self.player.half_size();
@@ -323,9 +696,51 @@ impl World {
     fn respawn_player(&mut self) {
         self.player = Player::new(self.respawn_pos.x, self.respawn_pos.y);
         self.portals = [None, None];
+        self.piercer = PiercerState::new();
+        self.death = None;
+        self.damage_pulse = DamagePulse::new();
+        self.sound_events.push(SoundEvent::DeathStop);
         self.sound_events
             .push(SoundEvent::HeavyLand(self.respawn_pos));
     }
+}
+
+fn ray_hits_enemy(
+    origin: glam::Vec2,
+    dir: glam::Vec2,
+    max_distance: f32,
+    center: glam::Vec2,
+    half_size: glam::Vec2,
+) -> Option<f32> {
+    let min = center - half_size;
+    let max = center + half_size;
+    let mut t_min: f32 = 0.0;
+    let mut t_max: f32 = max_distance;
+
+    for axis in 0..2 {
+        let origin_axis = origin[axis];
+        let dir_axis = dir[axis];
+        let min_axis = min[axis];
+        let max_axis = max[axis];
+
+        if dir_axis.abs() < 0.001 {
+            if origin_axis < min_axis || origin_axis > max_axis {
+                return None;
+            }
+            continue;
+        }
+
+        let inv_dir = 1.0 / dir_axis;
+        let t1 = (min_axis - origin_axis) * inv_dir;
+        let t2 = (max_axis - origin_axis) * inv_dir;
+        t_min = t_min.max(t1.min(t2));
+        t_max = t_max.min(t1.max(t2));
+        if t_min > t_max {
+            return None;
+        }
+    }
+
+    (t_min >= 0.0 && t_min <= max_distance).then_some(t_min)
 }
 
 fn world_portal_receiver_index(
@@ -333,6 +748,16 @@ fn world_portal_receiver_index(
     source_index: usize,
 ) -> Option<usize> {
     let source = portals.get(source_index)?;
+    if source.seamless {
+        let mut receivers = portals
+            .iter()
+            .enumerate()
+            .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
+            .map(|(index, _)| index);
+        let receiver = receivers.next()?;
+
+        return receivers.next().is_none().then_some(receiver);
+    }
 
     // Receiver ID forms a channel; priority resolves multiple exits on that channel.
     portals

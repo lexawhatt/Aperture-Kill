@@ -1,6 +1,7 @@
 use glam::Vec2;
 
 // Canvas draws pixels and converts between world and screen space.
+use crate::game::level::Solid;
 use crate::game::portal::Color;
 
 #[derive(Clone, Copy)]
@@ -15,6 +16,16 @@ pub(super) struct Canvas<'a> {
     pub(super) height: u32,
     camera: Vec2,
     zoom: f32,
+    clip: Option<WorldClip>,
+}
+
+#[derive(Clone)]
+pub(super) struct WorldClip {
+    origin: Vec2,
+    normal: Vec2,
+    depth: f32,
+    half_angle_cos: f32,
+    walls: Vec<Solid>,
 }
 
 impl<'a> Canvas<'a> {
@@ -31,6 +42,7 @@ impl<'a> Canvas<'a> {
             height,
             camera,
             zoom,
+            clip: None,
         }
     }
 
@@ -131,11 +143,98 @@ impl<'a> Canvas<'a> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return;
         }
+        if let Some(clip) = &self.clip {
+            let point = self.screen_to_world(Vec2::new(x as f32 + 0.5, y as f32 + 0.5));
+
+            if !clip.allows(point) {
+                return;
+            }
+        }
 
         self.frame[(y as u32 * self.width + x as u32) as usize] = color.to_u32();
+    }
+
+    pub(super) fn raw_px(&self, x: i32, y: i32) -> u32 {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return 0;
+        }
+
+        self.frame[(y as u32 * self.width + x as u32) as usize]
+    }
+
+    pub(super) fn put_raw_px(&mut self, x: i32, y: i32, color: u32) {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+
+        self.frame[(y as u32 * self.width + x as u32) as usize] = color;
+    }
+
+    pub(super) fn replace_clip(&mut self, clip: Option<WorldClip>) -> Option<WorldClip> {
+        std::mem::replace(&mut self.clip, clip)
     }
 
     fn screen_center(&self) -> Vec2 {
         Vec2::new(self.width as f32, self.height as f32) / 2.0
     }
+}
+
+impl WorldClip {
+    pub(super) fn behind_portal(
+        origin: Vec2,
+        normal: Vec2,
+        depth: f32,
+        angle_degrees: f32,
+        walls: Vec<Solid>,
+    ) -> Self {
+        let half_angle = angle_degrees.clamp(1.0, 360.0).to_radians() * 0.5;
+
+        Self {
+            origin,
+            normal,
+            depth,
+            half_angle_cos: half_angle.cos(),
+            walls,
+        }
+    }
+
+    fn allows(&self, point: Vec2) -> bool {
+        let offset = point - self.origin;
+        let distance = offset.dot(self.normal);
+
+        if distance > 0.0 || distance < -self.depth {
+            return false;
+        }
+
+        if self.half_angle_cos > -1.0 {
+            let ray = offset.normalize_or_zero();
+            if ray.length_squared() == 0.0 || ray.dot(-self.normal) < self.half_angle_cos {
+                return false;
+            }
+        }
+
+        !self
+            .walls
+            .iter()
+            .any(|solid| segment_hits_solid(offset, *solid, self.origin))
+    }
+}
+
+fn segment_hits_solid(offset: Vec2, solid: Solid, origin: Vec2) -> bool {
+    let length = offset.length();
+    if length <= 1.0 {
+        return false;
+    }
+
+    let steps = (length / 8.0).ceil().clamp(2.0, 96.0) as usize;
+    for step in 1..steps {
+        let t = step as f32 / steps as f32;
+        let point = origin + offset * t;
+
+        if solid.contains_point(point) {
+            return true;
+        }
+    }
+
+    false
 }

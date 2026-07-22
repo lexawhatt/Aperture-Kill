@@ -45,7 +45,7 @@ impl App {
         event_loop: &ActiveEventLoop,
     ) {
         match self.mode {
-            AppMode::Playing => {}
+            AppMode::Playing => self.handle_game_mouse(button, down),
             AppMode::LevelMenu => self.handle_menu_mouse(button, down, event_loop),
             AppMode::Changelog => self.handle_changelog_mouse(button, down),
             AppMode::Options => self.handle_options_mouse(button, down),
@@ -72,5 +72,13 @@ impl App {
         self.camera
             .zoom_editor_at(self.cursor_screen, width as f32, height as f32, steps);
         self.refresh_cursor_world_for(width, height);
+    }
+
+    fn handle_game_mouse(&mut self, button: MouseButton, down: bool) {
+        match button {
+            MouseButton::Left => self.input.set_primary_fire(down),
+            MouseButton::Right => self.input.set_alt_fire(down),
+            _ => {}
+        }
     }
 }

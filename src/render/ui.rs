@@ -1,10 +1,13 @@
 use glam::Vec2;
 
 // UI drawing stays in screen space.
-use crate::constants::MAX_DASH_CHARGES;
-use crate::game::World;
+use crate::constants::{
+    MAX_DASH_CHARGES, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_SHUTDOWN_FLASH_TIME,
+};
+use crate::game::level::{Solid, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::portal::Color;
+use crate::game::{DeathSequence, World};
 use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings, game_key_label, key_code_label};
 
@@ -23,6 +26,14 @@ struct OptionsContent<'a> {
 
 const MENU_V1: &[u8] = include_bytes!("../../assets/images/menu_v1.rgba");
 const MENU_V1_SIZE: usize = 760;
+const PIERCER_HUD: &[u8] = include_bytes!("../../assets/images/hud/PiercerHUDNew.rgba");
+const PIERCER_HUD_SIZE: (usize, usize) = (550, 268);
+const DEATH_SKULL_1: &[u8] = include_bytes!("../../assets/images/death/DeathScreenSkull1.rgba");
+const DEATH_SKULL_2: &[u8] = include_bytes!("../../assets/images/death/DeathScreenSkull2.rgba");
+const DEATH_SKULL_SIZE: (usize, usize) = (1637, 1636);
+const DEATH_SHUTDOWN_FLASH: &[u8] = include_bytes!("../../assets/images/death/ISeeYou.rgba");
+const DEATH_SHUTDOWN_FLASH_SIZE: (usize, usize) = (480, 270);
+const WORLD_PORTAL_EDIT_THICKNESS: f32 = 24.0;
 const MENU_SOURCE_LINES: [&str; 24] = [
     "#include { above, so } from \"aperture/core\";",
     "#include { permutation, transmutation, exhalation } from \"machine/v1\";",
@@ -51,12 +62,28 @@ const MENU_SOURCE_LINES: [&str; 24] = [
 ];
 
 impl Canvas<'_> {
-    pub(super) fn hud(&mut self, dash_charges: f32, dash_flash: f32) {
+    pub(super) fn hud(
+        &mut self,
+        health_value: f32,
+        health_percent: f32,
+        dash_charges: f32,
+        dash_flash: f32,
+    ) {
         let origin = Vec2::new(22.0, self.height as f32 - 92.0);
         let red = Color::rgb(255, 20, 20);
         let cyan = Color::rgb(39, 221, 255);
         let cyan_dim = Color::rgb(9, 86, 98);
         let black = Color::rgb(5, 8, 12);
+        let weapon_w = 260.0;
+        let weapon_h = weapon_w * PIERCER_HUD_SIZE.1 as f32 / PIERCER_HUD_SIZE.0 as f32;
+
+        self.draw_rgba_image(
+            PIERCER_HUD,
+            PIERCER_HUD_SIZE.0,
+            PIERCER_HUD_SIZE.1,
+            origin + Vec2::new(76.0, -weapon_h - 16.0),
+            Vec2::new(weapon_w, weapon_h),
+        );
 
         let health = Rect {
             pos: origin + Vec2::new(6.0, -5.0),
@@ -70,11 +97,21 @@ impl Canvas<'_> {
             10.0,
             Color::rgb(72, 0, 0),
         );
-        self.beveled_rect_fill(health, 10.0, red);
+        self.beveled_rect_fill(health, 10.0, Color::rgb(72, 0, 0));
+        if health_percent > 0.0 {
+            self.beveled_rect_fill(
+                Rect {
+                    pos: health.pos,
+                    size: Vec2::new(health.size.x * health_percent, health.size.y),
+                },
+                10.0 * health_percent.min(1.0),
+                red,
+            );
+        }
         self.beveled_rect_outline(health, 10.0, Color::rgb(255, 245, 245));
         self.text(
             origin + Vec2::new(28.0, 1.0),
-            "+100",
+            &format!("+{}", health_value.round() as i32),
             3,
             Color::rgb(255, 245, 245),
         );
@@ -119,6 +156,273 @@ impl Canvas<'_> {
                     stamina_fill,
                 );
             }
+        }
+    }
+
+    pub(super) fn death_overlay(&mut self, death: DeathSequence) {
+        if death.prompt_ready() {
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::ZERO,
+                    size: Vec2::new(self.width as f32, self.height as f32),
+                },
+                Color::rgb(0, 0, 0),
+            );
+            self.death_skull_screen(death);
+        } else {
+            self.death_scene_glitch(death.timer);
+            self.death_diagnostic_text(death);
+            self.death_glitch_bars(death.timer);
+            if death.timer >= PLAYER_DEATH_PROMPT_TIME - PLAYER_DEATH_SHUTDOWN_FLASH_TIME {
+                self.draw_rgba_image_opaque(
+                    DEATH_SHUTDOWN_FLASH,
+                    DEATH_SHUTDOWN_FLASH_SIZE.0,
+                    DEATH_SHUTDOWN_FLASH_SIZE.1,
+                    Vec2::ZERO,
+                    Vec2::new(self.width as f32, self.height as f32),
+                );
+            }
+        }
+    }
+
+    pub(super) fn damage_pulse(&mut self, amount: f32) {
+        let amount = amount.clamp(0.0, 1.0);
+        if amount <= 0.01 {
+            return;
+        }
+
+        let width = self.width as i32;
+        let height = self.height as i32;
+        let edge_falloff = (self.width.min(self.height) as f32 * 0.34).max(1.0);
+
+        for y in 0..height {
+            let y_edge = (y as f32).min(self.height as f32 - y as f32).max(0.0);
+            for x in 0..width {
+                let x_edge = (x as f32).min(self.width as f32 - x as f32).max(0.0);
+                let edge_distance = x_edge.min(y_edge);
+                let vignette = (1.0 - edge_distance / edge_falloff).clamp(0.0, 1.0);
+                let mix = amount * (0.18 + vignette * 0.76);
+
+                if mix <= 0.01 {
+                    continue;
+                }
+
+                self.put_raw_px(x, y, red_damage_pulse(self.raw_px(x, y), mix));
+            }
+        }
+    }
+
+    fn death_scene_glitch(&mut self, timer: f32) {
+        let width = self.width as i32;
+        let height = self.height as i32;
+        let intensity = (timer / PLAYER_DEATH_PROMPT_TIME).clamp(0.0, 1.0);
+        let seed = (timer * 1000.0) as i32;
+
+        for y in (0..height).step_by(2) {
+            for x in (0..width).step_by(2) {
+                let raw = self.raw_px(x, y);
+                self.put_raw_px(x, y, red_failure_tint(raw, intensity, x, y, seed));
+            }
+        }
+
+        let tear_count = 2 + (intensity * 2.0) as i32;
+        for index in 0..tear_count {
+            let y = (seed * (index + 7) * 17).rem_euclid(height.max(1));
+            let h = 2 + (seed + index * 5).rem_euclid(4);
+            let shift = (((seed + index * 19).rem_euclid(13)) - 6) * (1 + intensity as i32);
+            self.rgb_tear_band(y, h, shift);
+        }
+    }
+
+    fn rgb_tear_band(&mut self, y: i32, h: i32, shift: i32) {
+        let width = self.width as i32;
+        let height = self.height as i32;
+        let y1 = (y + h).min(height);
+        let mut source = Vec::with_capacity((width * (y1 - y).max(0)) as usize);
+
+        for yy in y..y1 {
+            for x in 0..width {
+                source.push(self.raw_px(x, yy));
+            }
+        }
+
+        for yy in y..y1 {
+            let row = yy - y;
+            for x in 0..width {
+                let sx = (x + shift).clamp(0, width - 1);
+                let rx = (x + shift * 2).clamp(0, width - 1);
+                let bx = (x - shift).clamp(0, width - 1);
+                let base = source[(row * width + sx) as usize];
+                let red = (source[(row * width + rx) as usize] >> 16) & 0xff;
+                let green = (base >> 8) & 0xff;
+                let blue = source[(row * width + bx) as usize] & 0xff;
+
+                self.put_raw_px(x, yy, (red << 16) | (green << 8) | blue);
+            }
+        }
+    }
+
+    fn death_diagnostic_text(&mut self, death: DeathSequence) {
+        let lines = [
+            ("WARNING: EXTREME DAMAGE SUSTAINED.", true),
+            ("RUNNING APERTURE DIAGNOSTIC", true),
+            ("ERROR: ARM CORE MODULE #1 NOT RESPONDING", false),
+            ("ERROR: ARM CORE MODULE #2 NOT RESPONDING", false),
+            ("WARNING: COMBAT SYSTEMS INOPERABLE", true),
+            ("ATTEMPTING RECONSTRUCTION", true),
+            ("ERROR: APERTURE SELF-REPAIR NEXUS NOT RESPONDING", false),
+            ("INSUFFICIENT BLOOD.", false),
+            ("INSUFFICIENT BLOOD.", false),
+            ("INITIATING ESCAPE PROTOCOL", true),
+            ("ERROR: PORTAL GUN FEEDBACK LOOP SEVERED", false),
+            ("WARNING: ASHPD LIMBIC LINK UNSTABLE", true),
+            ("ATTEMPTING CONNECTION WITH LIMBIC MODULES", true),
+            ("ERROR: LEG CORE MODULE #1 NOT RESPONDING", false),
+            ("ERROR: LEG CORE MODULE #2 NOT RESPONDING", false),
+            ("WARNING: UNABLE TO SUSTAIN MOTOR FUNCTIONS", true),
+            ("ERROR: VISUAL CORTEX MALFUNCTION", false),
+            ("ERROR: APERTURE NAVIGATION MESH LOST", false),
+            ("ERROR: LIMBIC FUNCTION NOT RESPONDING", false),
+            ("INSUFFICIENT BLOOD.", false),
+            ("WARNING: UNABLE TO SUSTAIN INTERNAL ORGANS", true),
+            ("! PULSE FAILURE !", false),
+            ("! PULSE FAILURE !", false),
+            ("-!- SHUTDOWN IMMINENT -!-", false),
+            ("WARNING: SUBJECT V1 PRESERVATION ROUTINE FAILED", true),
+            (
+                "ERROR: NO VOCAL INTERFACE DETECTED, UNABLE TO COMPLETE TASK",
+                false,
+            ),
+            ("! PULSE FAILURE !", false),
+            ("INSUFFICIENT BLOOD.", false),
+            ("ERROR: APERTURE BLACK BOX WRITE FAILURE", false),
+            ("WARNING: UNABLE TO SUSTAIN BASIC FUNCTIONS", true),
+            ("-!- SHUTDOWN IMMINENT -!-", false),
+            ("-!- SHUTDOWN IMMINENT -!-", false),
+            ("I DON'T WANT TO DIE.", false),
+            ("I DON'T WANT TO DIE.", false),
+            ("I DON'T WANT TO DIE.", false),
+            ("I DON'T WANT TO DIE.", false),
+        ];
+        let mut remaining = death.text_chars;
+        let left = 28.0;
+        let mut y = 18.0;
+
+        for (line, warning) in lines {
+            if remaining == 0 {
+                break;
+            }
+
+            let visible = remaining.min(line.len());
+            let text = &line[..visible];
+            let color = if warning {
+                Color::rgb(255, 174, 0)
+            } else {
+                Color::rgb(255, 14, 14)
+            };
+
+            self.text(Vec2::new(left, y), text, 2, color);
+            remaining = remaining.saturating_sub(line.len() + 1);
+            y += 22.0;
+            if y > self.height as f32 - 28.0 {
+                break;
+            }
+        }
+    }
+
+    fn death_glitch_bars(&mut self, timer: f32) {
+        let phase = (timer * 37.0) as i32;
+        for index in 0..9 {
+            let y = ((phase * (index + 3) * 19).rem_euclid(self.height as i32)) as f32;
+            let x = ((phase * (index + 5) * 11).rem_euclid(self.width as i32)) as f32;
+            let width =
+                ((self.width as f32 * 0.12) + index as f32 * 17.0).min(self.width as f32 - x);
+            let color = if index % 2 == 0 {
+                Color::rgb(255, 0, 0)
+            } else {
+                Color::rgb(0, 220, 255)
+            };
+
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::new(x, y),
+                    size: Vec2::new(width.max(16.0), 3.0),
+                },
+                color,
+            );
+        }
+    }
+
+    fn death_skull_screen(&mut self, death: DeathSequence) {
+        let image = if death.skull_frame == 0 {
+            DEATH_SKULL_1
+        } else {
+            DEATH_SKULL_2
+        };
+        let white = Color::rgb(245, 245, 245);
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let title_scale = if width < 760.0 || height < 520.0 {
+            3
+        } else {
+            5
+        };
+        let prompt_scale = if width < 760.0 || height < 520.0 {
+            3
+        } else {
+            4
+        };
+        let size = (width * 0.22).min(height * 0.29).clamp(96.0, 230.0);
+        let center = Vec2::new(width * 0.5, height * 0.39);
+        let pos = center - Vec2::splat(size * 0.5);
+        let frame_size = size * 1.34;
+
+        self.centered_text(
+            Vec2::new(width * 0.5, (height * 0.055).clamp(18.0, 54.0)),
+            "[YOU ARE DEAD]",
+            title_scale,
+            white,
+        );
+        self.octagon_outline(center, frame_size, white, 2);
+        self.draw_rgba_image(
+            image,
+            DEATH_SKULL_SIZE.0,
+            DEATH_SKULL_SIZE.1,
+            pos,
+            Vec2::splat(size),
+        );
+        self.centered_text(
+            Vec2::new(
+                width * 0.5,
+                (height * 0.72).min(pos.y + size + frame_size * 0.42),
+            ),
+            "Press [R] TO RESTART",
+            prompt_scale,
+            white,
+        );
+    }
+
+    fn octagon_outline(&mut self, center: Vec2, size: f32, color: Color, thickness: i32) {
+        let half = size * 0.5;
+        let cut = size * 0.19;
+        let points = [
+            center + Vec2::new(-half + cut, -half),
+            center + Vec2::new(half - cut, -half),
+            center + Vec2::new(half, -half + cut),
+            center + Vec2::new(half, half - cut),
+            center + Vec2::new(half - cut, half),
+            center + Vec2::new(-half + cut, half),
+            center + Vec2::new(-half, half - cut),
+            center + Vec2::new(-half, -half + cut),
+        ];
+
+        for index in 0..points.len() {
+            self.draw_line_thick(
+                points[index],
+                points[(index + 1) % points.len()],
+                color,
+                thickness,
+            );
         }
     }
 
@@ -495,11 +799,22 @@ impl Canvas<'_> {
                 portal.portal.pos + portal.portal.normal() * 24.0,
                 Color::rgb(210, 198, 255),
             );
+            if overlay.selection_count == 1 {
+                let edit_solid = world_portal_edit_solid(*portal);
+
+                self.resize_handles(edit_solid, Color::rgb(210, 198, 255));
+                if overlay.rotate_ui {
+                    self.rotate_handle(edit_solid, Color::rgb(210, 198, 255));
+                }
+            }
             self.world_text(
                 portal.portal.pos + Vec2::new(0.0, -34.0),
                 &format!(
-                    "WORLD PORTAL I:{} O:{} P:{}",
-                    portal.id, portal.receiver_id, portal.priority
+                    "WORLD PORTAL I:{} O:{} P:{}{}",
+                    portal.id,
+                    portal.receiver_id,
+                    portal.priority,
+                    if portal.seamless { " SEAM" } else { "" }
                 ),
                 1,
                 Color::rgb(210, 198, 255),
@@ -721,7 +1036,7 @@ impl Canvas<'_> {
     }
 
     fn editor_inspector_panel(&mut self, overlay: &EditorOverlay) {
-        let size = Vec2::new((self.width as f32 * 0.24).clamp(300.0, 360.0), 276.0);
+        let size = Vec2::new((self.width as f32 * 0.24).clamp(300.0, 360.0), 472.0);
         let pos = Vec2::new(
             self.width as f32 - size.x - 92.0,
             self.height as f32 * 0.5 - size.y * 0.5,
@@ -792,8 +1107,38 @@ impl Canvas<'_> {
                 self.editor_stepper_row(
                     pos + Vec2::new(18.0, 226.0),
                     size.x - 36.0,
-                    "WIDTH",
-                    &format!("{:.0}", portal.width),
+                    "SCALE",
+                    &format!("{:.1}", portal.scale),
+                );
+                self.editor_toggle_row(
+                    pos + Vec2::new(18.0, 274.0),
+                    size.x - 36.0,
+                    "SEAMLESS",
+                    if portal.seamless { "ON" } else { "OFF" },
+                    portal.seamless,
+                );
+                self.editor_stepper_row(
+                    pos + Vec2::new(18.0, 322.0),
+                    size.x - 36.0,
+                    "AREA",
+                    &format!("{:.0}", portal.seamless_depth),
+                );
+                self.editor_stepper_row(
+                    pos + Vec2::new(18.0, 370.0),
+                    size.x - 36.0,
+                    "ANGLE",
+                    &format!("{:.0}", portal.seamless_angle),
+                );
+                self.editor_toggle_row(
+                    pos + Vec2::new(18.0, 418.0),
+                    size.x - 36.0,
+                    "WALLS",
+                    if portal.seamless_rely_on_walls {
+                        "ON"
+                    } else {
+                        "OFF"
+                    },
+                    portal.seamless_rely_on_walls,
                 );
             }
             EditorInspector::None => {
@@ -1511,20 +1856,63 @@ impl Canvas<'_> {
             (center_x - target_size * 0.5).clamp(left_bound, right_bound - target_size),
             ((height - target_size) * 0.48).clamp(92.0, max_y),
         );
-        let scale = target_size / MENU_V1_SIZE as f32;
-        let dest_w = target_size.round() as i32;
-        let dest_h = target_size.round() as i32;
+
+        self.draw_rgba_image(
+            MENU_V1,
+            MENU_V1_SIZE,
+            MENU_V1_SIZE,
+            pos,
+            Vec2::splat(target_size),
+        );
+    }
+
+    fn draw_rgba_image(
+        &mut self,
+        bytes: &[u8],
+        source_width: usize,
+        source_height: usize,
+        pos: Vec2,
+        size: Vec2,
+    ) {
+        self.draw_rgba_image_inner(bytes, source_width, source_height, pos, size, true);
+    }
+
+    fn draw_rgba_image_opaque(
+        &mut self,
+        bytes: &[u8],
+        source_width: usize,
+        source_height: usize,
+        pos: Vec2,
+        size: Vec2,
+    ) {
+        self.draw_rgba_image_inner(bytes, source_width, source_height, pos, size, false);
+    }
+
+    fn draw_rgba_image_inner(
+        &mut self,
+        bytes: &[u8],
+        source_width: usize,
+        source_height: usize,
+        pos: Vec2,
+        size: Vec2,
+        skip_dark: bool,
+    ) {
+        let dest_w = size.x.round().max(1.0) as i32;
+        let dest_h = size.y.round().max(1.0) as i32;
+        let scale_x = source_width as f32 / dest_w as f32;
+        let scale_y = source_height as f32 / dest_h as f32;
 
         for dy in 0..dest_h {
-            let sy = ((dy as f32 / scale) as usize).min(MENU_V1_SIZE - 1);
+            let sy = ((dy as f32 * scale_y) as usize).min(source_height - 1);
             for dx in 0..dest_w {
-                let sx = ((dx as f32 / scale) as usize).min(MENU_V1_SIZE - 1);
-                let index = (sy * MENU_V1_SIZE + sx) * 4;
-                let r = MENU_V1[index];
-                let g = MENU_V1[index + 1];
-                let b = MENU_V1[index + 2];
+                let sx = ((dx as f32 * scale_x) as usize).min(source_width - 1);
+                let index = (sy * source_width + sx) * 4;
+                let r = bytes[index];
+                let g = bytes[index + 1];
+                let b = bytes[index + 2];
+                let a = bytes[index + 3];
 
-                if r < 20 && g < 20 && b < 20 {
+                if a < 24 || (skip_dark && r < 20 && g < 20 && b < 20) {
                     continue;
                 }
 
@@ -1659,6 +2047,53 @@ fn options_button_gap(height: f32) -> f32 {
 
 fn options_show_scrollbar(width: f32, height: f32) -> bool {
     width >= 1180.0 && height >= 720.0
+}
+
+fn world_portal_edit_solid(portal: WorldPortal) -> Solid {
+    let width = portal.portal.active_width().max(24.0);
+    let size = Vec2::new(width, WORLD_PORTAL_EDIT_THICKNESS);
+    let center = portal.center();
+
+    Solid::rotated(
+        center.x - size.x / 2.0,
+        center.y - size.y / 2.0,
+        size.x,
+        size.y,
+        portal.portal.tangent().to_angle(),
+        false,
+    )
+}
+
+fn red_failure_tint(raw: u32, intensity: f32, x: i32, y: i32, seed: i32) -> u32 {
+    let noise = ((x * 7 + y * 11 + seed).rem_euclid(13) - 6) as f32;
+    let red = ((raw >> 16) & 0xff) as f32;
+    let green = ((raw >> 8) & 0xff) as f32;
+    let blue = (raw & 0xff) as f32;
+    let failure = intensity.powf(1.25) * 0.58;
+    let scanline = if (y + seed).rem_euclid(11) == 0 {
+        0.82
+    } else {
+        1.0
+    };
+
+    let r = (red + 88.0 * failure + noise * 0.45).clamp(0.0, 255.0) as u32;
+    let g = (green * (1.0 - failure * 0.38) * scanline).clamp(0.0, 255.0) as u32;
+    let b = (blue * (1.0 - failure * 0.52) * scanline).clamp(0.0, 255.0) as u32;
+
+    (r << 16) | (g << 8) | b
+}
+
+fn red_damage_pulse(raw: u32, amount: f32) -> u32 {
+    let amount = amount.clamp(0.0, 1.0);
+    let red = ((raw >> 16) & 0xff) as f32;
+    let green = ((raw >> 8) & 0xff) as f32;
+    let blue = (raw & 0xff) as f32;
+
+    let r = (red + (255.0 - red) * amount * 0.72).clamp(0.0, 255.0) as u32;
+    let g = (green * (1.0 - amount * 0.62)).clamp(0.0, 255.0) as u32;
+    let b = (blue * (1.0 - amount * 0.72)).clamp(0.0, 255.0) as u32;
+
+    (r << 16) | (g << 8) | b
 }
 
 fn mix_color(a: Color, b: Color, amount: f32) -> Color {

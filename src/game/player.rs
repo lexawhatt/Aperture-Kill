@@ -6,14 +6,15 @@ use crate::constants::{
     AIR_SLIDE_WALL_KICK_Y, BUNNY_HOP_GRACE, CROUCH_SPEED_SCALE, DASH_CHARGE_RECOVERY,
     DASH_DENY_FLASH_TIME, DASH_DURATION, DASH_SPEED, DASH_STORAGE_TIME, DIVE_BOOST, DIVE_WINDOW,
     GRAVITY, GROUND_ACCEL, GROUND_FRICTION, GROUND_SLAM_ACCEL, GROUND_SLAM_SPEED, JUMP_BUFFER_TIME,
-    JUMP_COYOTE_TIME, JUMP_VELOCITY, MAX_DASH_CHARGES, MAX_WALL_JUMPS, PLAYER_SIZE, PLAYER_SPEED,
-    PORTAL_EXIT_GRACE, PORTAL_KICK_SPEED, PORTAL_SLIDE_BOOST, SLAM_BOUNCE_MAX_SPEED,
-    SLAM_BOUNCE_SCALE, SLAM_DIVE_MAX_X, SLAM_DIVE_SCALE_X, SLAM_DIVE_SCALE_Y, SLAM_JUMP_WINDOW,
-    SLAM_NORMAL_BOUNCE_MAX_SPEED, SLAM_NORMAL_HEIGHT_GAIN, SLAM_NORMAL_MIN_BONUS,
-    SLAM_SLIDE_SCALE_X, SLAM_STORAGE_MIN_SPEED, SLIDE_BOOST, SLIDE_CHAIN_BOOST,
-    SLIDE_CHAIN_MAX_SPEED, SLIDE_FRICTION, SLIDE_HEIGHT_SCALE, SLIDE_JUMP_HEIGHT_SCALE,
-    VERTICAL_WALL_JUMP_SPEED, VERTICAL_WALL_JUMP_THRESHOLD, VERTICAL_WALL_JUMP_WINDOW, WALL_JUMP_X,
-    WALL_JUMP_Y, WALL_SLAM_MAX_SPEED, WALL_SLAM_SCALE, WALL_SLIDE_SPEED, WALL_STICK_TIME,
+    JUMP_COYOTE_TIME, JUMP_VELOCITY, MAX_DASH_CHARGES, MAX_WALL_JUMPS, PLAYER_DAMAGE_GRACE,
+    PLAYER_MAX_HEALTH, PLAYER_SIZE, PLAYER_SPEED, PORTAL_EXIT_GRACE, PORTAL_KICK_SPEED,
+    PORTAL_SLIDE_BOOST, SLAM_BOUNCE_MAX_SPEED, SLAM_BOUNCE_SCALE, SLAM_DIVE_MAX_X,
+    SLAM_DIVE_SCALE_X, SLAM_DIVE_SCALE_Y, SLAM_JUMP_WINDOW, SLAM_NORMAL_BOUNCE_MAX_SPEED,
+    SLAM_NORMAL_HEIGHT_GAIN, SLAM_NORMAL_MIN_BONUS, SLAM_SLIDE_SCALE_X, SLAM_STORAGE_MIN_SPEED,
+    SLIDE_BOOST, SLIDE_CHAIN_BOOST, SLIDE_CHAIN_MAX_SPEED, SLIDE_FRICTION, SLIDE_HEIGHT_SCALE,
+    SLIDE_JUMP_HEIGHT_SCALE, VERTICAL_WALL_JUMP_SPEED, VERTICAL_WALL_JUMP_THRESHOLD,
+    VERTICAL_WALL_JUMP_WINDOW, WALL_JUMP_X, WALL_JUMP_Y, WALL_SLAM_MAX_SPEED, WALL_SLAM_SCALE,
+    WALL_SLIDE_SPEED, WALL_STICK_TIME,
 };
 use crate::platform::input::{GameKey, Input};
 
@@ -58,6 +59,7 @@ struct MovementTimers {
     dash: f32,
     dash_deny_flash: f32,
     dash_storage: f32,
+    damage_grace: f32,
     dive: f32,
     jump_buffer: f32,
     portal_exit: f32,
@@ -74,6 +76,7 @@ impl MovementTimers {
             dash: 0.0,
             dash_deny_flash: 0.0,
             dash_storage: 0.0,
+            damage_grace: 0.0,
             dive: 0.0,
             jump_buffer: 0.0,
             portal_exit: 0.0,
@@ -89,6 +92,7 @@ impl MovementTimers {
         self.dash = (self.dash - dt).max(0.0);
         self.dash_deny_flash = (self.dash_deny_flash - dt).max(0.0);
         self.dash_storage = (self.dash_storage - dt).max(0.0);
+        self.damage_grace = (self.damage_grace - dt).max(0.0);
         self.dive = (self.dive - dt).max(0.0);
         self.jump_buffer = (self.jump_buffer - dt).max(0.0);
         self.portal_exit = (self.portal_exit - dt).max(0.0);
@@ -138,6 +142,7 @@ pub struct Player {
     pub aim_pos: Vec2,
     pub on_ground: bool,
     pub dash_charges: f32,
+    pub health: f32,
     movement_state: MovementState,
     dash_dir: Vec2,
     facing: f32,
@@ -176,6 +181,7 @@ impl Player {
             on_ground: false,
             movement_state: MovementState::Normal,
             dash_charges: MAX_DASH_CHARGES,
+            health: PLAYER_MAX_HEALTH,
             dash_dir: Vec2::X,
             facing: 1.0,
             air_slide_wall_speed: 0.0,
@@ -332,6 +338,21 @@ impl Player {
 
     pub fn dash_deny_flash(&self) -> f32 {
         (self.timers.dash_deny_flash / DASH_DENY_FLASH_TIME).clamp(0.0, 1.0)
+    }
+
+    pub fn health_percent(&self) -> f32 {
+        (self.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0)
+    }
+
+    pub fn damage(&mut self, amount: f32) -> bool {
+        if amount <= 0.0 || self.timers.damage_grace > 0.0 {
+            return false;
+        }
+
+        self.health = (self.health - amount).max(0.0);
+        self.timers.damage_grace = PLAYER_DAMAGE_GRACE;
+
+        self.health == 0.0
     }
 
     pub fn is_sliding(&self) -> bool {

@@ -4,6 +4,7 @@ mod raycast;
 // Level geometry is stored in world space.
 use glam::Vec2;
 
+use crate::game::enemy::Enemy;
 use crate::game::portal::{Color, Portal};
 
 const RAY_EPSILON: f32 = 0.001;
@@ -246,6 +247,10 @@ pub struct WorldPortal {
     pub id: u16,
     pub receiver_id: u16,
     pub priority: i16,
+    pub seamless: bool,
+    pub seamless_depth: f32,
+    pub seamless_angle: f32,
+    pub seamless_rely_on_walls: bool,
 }
 
 impl WorldPortal {
@@ -255,6 +260,10 @@ impl WorldPortal {
             id,
             receiver_id: id,
             priority: 0,
+            seamless: false,
+            seamless_depth: 256.0,
+            seamless_angle: 180.0,
+            seamless_rely_on_walls: false,
         }
     }
 
@@ -307,6 +316,7 @@ pub struct Level {
     pub doors: Vec<Door>,
     pub hazards: Vec<Hazard>,
     pub checkpoints: Vec<Checkpoint>,
+    pub enemies: Vec<Enemy>,
     pub texts: Vec<LevelText>,
     pub world_portals: Vec<WorldPortal>,
 }
@@ -361,6 +371,7 @@ impl Level {
             doors: Vec::new(),
             hazards: Vec::new(),
             checkpoints: Vec::new(),
+            enemies: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
         }
@@ -382,6 +393,7 @@ impl Level {
             doors: Vec::new(),
             hazards: Vec::new(),
             checkpoints: Vec::new(),
+            enemies: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
         }

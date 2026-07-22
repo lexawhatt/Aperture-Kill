@@ -15,6 +15,7 @@ pub enum GameKey {
 struct ButtonState {
     down: bool,
     pressed: bool,
+    released: bool,
     was_down: bool,
 }
 
@@ -29,10 +30,12 @@ impl ButtonState {
 
     fn consume_press(&mut self) {
         self.pressed = false;
+        self.released = false;
     }
 
     fn update(&mut self) {
         self.pressed = self.down && !self.was_down;
+        self.released = !self.down && self.was_down;
         self.was_down = self.down;
     }
 }
@@ -46,8 +49,12 @@ pub struct Input {
     jump: ButtonState,
     left_down: bool,
     orange_portal: ButtonState,
+    primary_fire: ButtonState,
+    alt_fire: ButtonState,
+    respawn: ButtonState,
     right_down: bool,
     slide: ButtonState,
+    weapon_1: ButtonState,
 }
 
 impl Input {
@@ -71,14 +78,34 @@ impl Input {
         self.aim_pos = aim_pos;
     }
 
+    pub fn set_primary_fire(&mut self, down: bool) {
+        self.primary_fire.set_down(down);
+    }
+
+    pub fn set_alt_fire(&mut self, down: bool) {
+        self.alt_fire.set_down(down);
+    }
+
+    pub fn set_weapon_1(&mut self, down: bool) {
+        self.weapon_1.set_down(down);
+    }
+
+    pub fn set_respawn(&mut self, down: bool) {
+        self.respawn.set_down(down);
+    }
+
     pub fn release_gameplay(&mut self) {
         self.blue_portal.release();
         self.dash.release();
         self.jump.release();
         self.left_down = false;
         self.orange_portal.release();
+        self.primary_fire.release();
+        self.alt_fire.release();
+        self.respawn.release();
         self.right_down = false;
         self.slide.release();
+        self.weapon_1.release();
     }
 
     pub fn consume_presses(&mut self) {
@@ -86,7 +113,11 @@ impl Input {
         self.dash.consume_press();
         self.jump.consume_press();
         self.orange_portal.consume_press();
+        self.primary_fire.consume_press();
+        self.alt_fire.consume_press();
+        self.respawn.consume_press();
         self.slide.consume_press();
+        self.weapon_1.consume_press();
     }
 
     pub fn key_down(&self, key: GameKey) -> bool {
@@ -112,13 +143,41 @@ impl Input {
         }
     }
 
+    pub fn primary_fire_pressed(&self) -> bool {
+        self.primary_fire.pressed
+    }
+
+    pub fn primary_fire_down(&self) -> bool {
+        self.primary_fire.down
+    }
+
+    pub fn alt_fire_down(&self) -> bool {
+        self.alt_fire.down
+    }
+
+    pub fn alt_fire_released(&self) -> bool {
+        self.alt_fire.released
+    }
+
+    pub fn weapon_1_pressed(&self) -> bool {
+        self.weapon_1.pressed
+    }
+
+    pub fn respawn_pressed(&self) -> bool {
+        self.respawn.pressed
+    }
+
     pub fn update(&mut self) {
         // Edge flags let actions fire once, while *_down keeps hold state.
         self.blue_portal.update();
         self.dash.update();
         self.jump.update();
         self.orange_portal.update();
+        self.primary_fire.update();
+        self.alt_fire.update();
+        self.respawn.update();
         self.slide.update();
+        self.weapon_1.update();
 
         // Left and right cancel out naturally through a single intent axis.
         self.move_x = 0.0;

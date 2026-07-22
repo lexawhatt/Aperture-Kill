@@ -8,8 +8,9 @@ mod world;
 use glam::Vec2;
 
 use crate::game::World;
+use crate::game::level::WorldPortal;
 use crate::game::levels::LevelSpec;
-use crate::game::portal::Color;
+use crate::game::portal::{Color, Portal};
 use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings};
 
@@ -85,7 +86,11 @@ pub struct EditorWorldPortalInspector {
     pub id: u16,
     pub receiver_id: u16,
     pub priority: i16,
-    pub width: f32,
+    pub scale: f32,
+    pub seamless: bool,
+    pub seamless_depth: f32,
+    pub seamless_angle: f32,
+    pub seamless_rely_on_walls: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -122,10 +127,20 @@ impl Renderer {
             fps,
         } = render;
         let mut canvas = Canvas::new(frame, width, height, camera, zoom);
+        let editor_mode = matches!(&mode, RenderMode::Editor(_));
 
         canvas.clear(Color::rgb(9, 10, 14));
-        self.draw_world(&mut canvas, world);
-        canvas.hud(world.player.dash_charges, world.player.dash_deny_flash());
+        self.draw_world(&mut canvas, world, editor_mode);
+        canvas.hud(
+            world.player.health,
+            world.player.health_percent(),
+            world.player.dash_charges,
+            world.player.dash_deny_flash(),
+        );
+        canvas.damage_pulse(world.damage_pulse.amount());
+        if let Some(death) = world.death {
+            canvas.death_overlay(death);
+        }
 
         match mode {
             RenderMode::Playing => {}
@@ -154,7 +169,9 @@ impl Renderer {
         }
     }
 
-    fn draw_world(&self, canvas: &mut Canvas<'_>, world: &World) {
+    fn draw_world(&self, canvas: &mut Canvas<'_>, world: &World, editor_mode: bool) {
+        canvas.seamless_portal_views(world);
+
         // Static geometry is drawn first so portals and actors stay readable.
         for solid in &world.level.solids {
             let fill = if solid.portalable {
@@ -162,7 +179,12 @@ impl Renderer {
             } else {
                 Color::rgb(55, 45, 47)
             };
-            canvas.solid(*solid, fill, Color::rgb(92, 105, 125));
+            canvas.solid_with_seamless_holes(
+                *solid,
+                fill,
+                Color::rgb(92, 105, 125),
+                &world.level.world_portals,
+            );
         }
 
         for door in &world.level.doors {
@@ -182,6 +204,10 @@ impl Renderer {
         }
 
         for portal in &world.level.world_portals {
+            if portal.seamless && !editor_mode {
+                continue;
+            }
+
             let (a, b) = portal.portal.endpoints();
             canvas.draw_world_line(a, b, portal.portal.color);
             canvas.draw_world_line(
@@ -206,6 +232,14 @@ impl Renderer {
                 portal.pos + portal.normal() * 16.0,
                 portal.color,
             );
+        }
+
+        for enemy in &world.level.enemies {
+            canvas.enemy(enemy);
+        }
+
+        if let Some(beam) = world.piercer.beam {
+            canvas.piercer_beam(beam);
         }
 
         self.draw_player(canvas, world);
@@ -234,9 +268,13 @@ impl Renderer {
                 canvas.player_rect_through_portal(rect, source, destination, fill, outline);
             } else if destination.opens_for_body(player.pos, player.half_size()) {
                 canvas.player_rect_through_portal(rect, destination, source, fill, outline);
+            } else if let Some((source, destination)) = active_world_portal_for_body(world) {
+                canvas.player_rect_through_portal(rect, source, destination, fill, outline);
             } else {
                 canvas.player_rect(rect, fill, outline);
             }
+        } else if let Some((source, destination)) = active_world_portal_for_body(world) {
+            canvas.player_rect_through_portal(rect, source, destination, fill, outline);
         } else {
             canvas.player_rect(rect, fill, outline);
         }
@@ -248,15 +286,63 @@ impl Renderer {
 
     fn draw_aim(&self, canvas: &mut Canvas<'_>, world: &World) {
         let player = &world.player;
-        canvas.draw_world_line(player.aim_from(), player.aim_pos, Color::rgb(255, 70, 86));
-        canvas.fill_world_rect(
+        let aim = canvas.world_to_screen(player.aim_pos);
+        canvas.fill_rect(
             Rect {
-                pos: player.aim_pos - Vec2::splat(3.0),
-                size: Vec2::splat(6.0),
+                pos: aim - Vec2::splat(3.0),
+                size: Vec2::splat(7.0),
+            },
+            Color::rgb(4, 8, 12),
+        );
+        canvas.fill_rect(
+            Rect {
+                pos: aim - Vec2::splat(1.0),
+                size: Vec2::splat(3.0),
             },
             Color::rgb(255, 70, 86),
         );
     }
+}
+
+fn active_world_portal_for_body(world: &World) -> Option<(Portal, Portal)> {
+    let player = &world.player;
+
+    world
+        .level
+        .world_portals
+        .iter()
+        .enumerate()
+        .find_map(|(source_index, source)| {
+            if !source.portal.opens_for_body(player.pos, player.half_size()) {
+                return None;
+            }
+            let destination_index =
+                world_portal_receiver_index(&world.level.world_portals, source_index)?;
+            let destination = world.level.world_portals.get(destination_index)?;
+
+            Some((source.portal, destination.portal))
+        })
+}
+
+fn world_portal_receiver_index(portals: &[WorldPortal], source_index: usize) -> Option<usize> {
+    let source = portals.get(source_index)?;
+    if source.seamless {
+        let mut receivers = portals
+            .iter()
+            .enumerate()
+            .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
+            .map(|(index, _)| index);
+        let receiver = receivers.next()?;
+
+        return receivers.next().is_none().then_some(receiver);
+    }
+
+    portals
+        .iter()
+        .enumerate()
+        .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
+        .max_by_key(|(_, portal)| portal.priority)
+        .map(|(index, _)| index)
 }
 
 impl Color {

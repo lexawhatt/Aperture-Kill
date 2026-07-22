@@ -19,6 +19,17 @@ const LAND_HEAVY: &[u8] = include_bytes!("../../assets/sounds/land_heavy.wav");
 const MENU_MUSIC: &[u8] = include_bytes!("../../assets/sounds/menu_the_fire_is_gone.wav");
 const PORTAL_FIRE: &[u8] = include_bytes!("../../assets/sounds/portal_fire.wav");
 const PORTAL_PLACE: &[u8] = include_bytes!("../../assets/sounds/portal_place.wav");
+const V1_HURT: &[u8] = include_bytes!("../../assets/sounds/death/V1_hurt.wav");
+const DEATH_SEQUENCE: &[u8] = include_bytes!("../../assets/sounds/death/DeathSequence.wav");
+const DEATH_SKULL: &[u8] = include_bytes!("../../assets/sounds/death/8bitAhh.wav");
+const DEATH_CAMERA_CUT: &[u8] =
+    include_bytes!("../../assets/sounds/death/camera_cutting_out_in_death_seq.wav");
+const PIERCER_CHARGE: &[u8] = include_bytes!("../../assets/sounds/weapons/PierceCharge.wav");
+const PIERCER_SHOT_1: &[u8] = include_bytes!("../../assets/sounds/weapons/Shoot1.wav");
+const PIERCER_SHOT_2: &[u8] = include_bytes!("../../assets/sounds/weapons/Shoot1c3.wav");
+const PIERCER_SHOT_3: &[u8] = include_bytes!("../../assets/sounds/weapons/Shoot1c4.wav");
+const FILTH_BITE: &[u8] =
+    include_bytes!("../../assets/sounds/enemies/Zombie_Weak_Death_Reverse.wav");
 
 pub(super) struct Audio {
     _stream: Option<OutputStream>,
@@ -26,9 +37,14 @@ pub(super) struct Audio {
     dash: Option<Sink>,
     slide: Option<Sink>,
     ground_slam: Option<Sink>,
+    piercer_charge: Option<Sink>,
+    death_sequence: Option<Sink>,
+    death_skull: Option<Sink>,
+    death_camera_cut: Option<Sink>,
     menu_music: Option<Sink>,
     menu_falling: Option<Sink>,
     doors: HashMap<usize, Sink>,
+    piercer_shot_index: usize,
     master_volume: f32,
     sfx_volume: f32,
     music_volume: f32,
@@ -43,9 +59,14 @@ impl Audio {
                 dash: None,
                 slide: None,
                 ground_slam: None,
+                piercer_charge: None,
+                death_sequence: None,
+                death_skull: None,
+                death_camera_cut: None,
                 menu_music: None,
                 menu_falling: None,
                 doors: HashMap::new(),
+                piercer_shot_index: 0,
                 master_volume: 1.0,
                 sfx_volume: 1.0,
                 music_volume: 1.0,
@@ -65,9 +86,14 @@ impl Audio {
                     dash: None,
                     slide: None,
                     ground_slam: None,
+                    piercer_charge: None,
+                    death_sequence: None,
+                    death_skull: None,
+                    death_camera_cut: None,
                     menu_music: None,
                     menu_falling: None,
                     doors: HashMap::new(),
+                    piercer_shot_index: 0,
                     master_volume: 1.0,
                     sfx_volume: 1.0,
                     music_volume: 1.0,
@@ -86,6 +112,10 @@ impl Audio {
             self.dash.as_ref(),
             self.slide.as_ref(),
             self.ground_slam.as_ref(),
+            self.piercer_charge.as_ref(),
+            self.death_sequence.as_ref(),
+            self.death_skull.as_ref(),
+            self.death_camera_cut.as_ref(),
             self.menu_falling.as_ref(),
         ]
         .into_iter()
@@ -149,10 +179,38 @@ impl Audio {
                 self.stop_action(ActionSound::GroundSlam);
                 return;
             }
+            SoundEvent::PiercerChargeStart(pos) => {
+                self.start_action(
+                    ActionSound::PiercerCharge,
+                    PIERCER_CHARGE,
+                    0.64 * attenuation(pos, listener),
+                    true,
+                );
+                return;
+            }
+            SoundEvent::PiercerChargeStop => {
+                self.stop_action(ActionSound::PiercerCharge);
+                return;
+            }
+            SoundEvent::DeathSequence => {
+                self.stop_actions();
+                self.stop_death();
+                self.start_death_sound(DeathSound::CameraCut, DEATH_CAMERA_CUT, 0.72);
+                self.start_death_sound(DeathSound::Sequence, DEATH_SEQUENCE, 0.94);
+                return;
+            }
+            SoundEvent::DeathSkull => {
+                self.start_death_sound(DeathSound::Skull, DEATH_SKULL, 0.86);
+                return;
+            }
+            SoundEvent::DeathStop => {
+                self.stop_death();
+                return;
+            }
             _ => {}
         }
 
-        let (bytes, volume) = match event {
+        let (bytes, volume): (&'static [u8], f32) = match event {
             SoundEvent::Footstep(index, pos) => match index % 3 {
                 0 => (FOOTSTEP_1, 0.48 * attenuation(pos, listener)),
                 1 => (FOOTSTEP_2, 0.48 * attenuation(pos, listener)),
@@ -163,6 +221,11 @@ impl Audio {
             SoundEvent::HeavyLand(pos) => (LAND_HEAVY, 0.72 * attenuation(pos, listener)),
             SoundEvent::PortalFire(pos) => (PORTAL_FIRE, 0.72 * attenuation(pos, listener)),
             SoundEvent::PortalPlace(pos) => (PORTAL_PLACE, 0.82 * attenuation(pos, listener)),
+            SoundEvent::PlayerHurt(pos) => (V1_HURT, 0.84 * attenuation(pos, listener)),
+            SoundEvent::FilthBite(pos) => (FILTH_BITE, 0.76 * attenuation(pos, listener)),
+            SoundEvent::PiercerFire(pos) | SoundEvent::PiercerCharged(pos) => {
+                (self.next_piercer_shot(), 0.72 * attenuation(pos, listener))
+            }
             SoundEvent::DoorOpen { .. }
             | SoundEvent::DoorClose { .. }
             | SoundEvent::DoorStop { .. }
@@ -171,7 +234,12 @@ impl Audio {
             | SoundEvent::SlideStart(_)
             | SoundEvent::SlideEnd
             | SoundEvent::GroundSlamStart(_)
-            | SoundEvent::GroundSlamEnd => return,
+            | SoundEvent::GroundSlamEnd
+            | SoundEvent::PiercerChargeStart(_)
+            | SoundEvent::PiercerChargeStop
+            | SoundEvent::DeathSequence
+            | SoundEvent::DeathSkull
+            | SoundEvent::DeathStop => return,
         };
         self.play_one_shot(bytes, volume);
     }
@@ -200,9 +268,37 @@ impl Audio {
         self.stop_action(ActionSound::Dash);
         self.stop_action(ActionSound::Slide);
         self.stop_action(ActionSound::GroundSlam);
+        self.stop_action(ActionSound::PiercerCharge);
         for (_, sink) in self.doors.drain() {
             sink.stop();
         }
+    }
+
+    fn start_death_sound(&mut self, sound: DeathSound, bytes: &'static [u8], volume: f32) {
+        self.stop_death_sound(sound);
+
+        if volume <= 0.01 {
+            return;
+        }
+        let Some(handle) = self.handle.as_ref() else {
+            return;
+        };
+        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+            return;
+        };
+        let Ok(sink) = Sink::try_new(handle) else {
+            return;
+        };
+
+        sink.set_volume(self.sfx_sink_volume());
+        sink.append(decoder.amplify(volume));
+        *self.death_sink(sound) = Some(sink);
+    }
+
+    fn stop_death(&mut self) {
+        self.stop_death_sound(DeathSound::Sequence);
+        self.stop_death_sound(DeathSound::Skull);
+        self.stop_death_sound(DeathSound::CameraCut);
     }
 
     pub(super) fn start_menu_ambience(&mut self) {
@@ -279,6 +375,12 @@ impl Audio {
         }
     }
 
+    fn stop_death_sound(&mut self, sound: DeathSound) {
+        if let Some(sink) = self.death_sink(sound).take() {
+            sink.stop();
+        }
+    }
+
     fn start_door(&mut self, index: usize, bytes: &'static [u8], volume: f32) {
         self.stop_door(index);
 
@@ -311,7 +413,27 @@ impl Audio {
             ActionSound::Dash => &mut self.dash,
             ActionSound::Slide => &mut self.slide,
             ActionSound::GroundSlam => &mut self.ground_slam,
+            ActionSound::PiercerCharge => &mut self.piercer_charge,
         }
+    }
+
+    fn death_sink(&mut self, sound: DeathSound) -> &mut Option<Sink> {
+        match sound {
+            DeathSound::Sequence => &mut self.death_sequence,
+            DeathSound::Skull => &mut self.death_skull,
+            DeathSound::CameraCut => &mut self.death_camera_cut,
+        }
+    }
+
+    fn next_piercer_shot(&mut self) -> &'static [u8] {
+        let shot = match self.piercer_shot_index % 3 {
+            0 => PIERCER_SHOT_1,
+            1 => PIERCER_SHOT_2,
+            _ => PIERCER_SHOT_3,
+        };
+
+        self.piercer_shot_index = (self.piercer_shot_index + 1) % 3;
+        shot
     }
 
     fn menu_sink(&mut self, sound: MenuLoop) -> &mut Option<Sink> {
@@ -335,6 +457,14 @@ enum ActionSound {
     Dash,
     Slide,
     GroundSlam,
+    PiercerCharge,
+}
+
+#[derive(Clone, Copy)]
+enum DeathSound {
+    Sequence,
+    Skull,
+    CameraCut,
 }
 
 #[derive(Clone, Copy)]

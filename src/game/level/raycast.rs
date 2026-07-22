@@ -26,6 +26,29 @@ impl Level {
             .map(|(_, hit)| hit)
     }
 
+    pub fn raycast_any_solid(&self, origin: Vec2, target: Vec2) -> Option<RayHit> {
+        let dir = target - origin;
+        if dir.length_squared() <= 1.0 {
+            return None;
+        }
+
+        let max_distance = dir.length();
+        let ray_dir = dir / max_distance;
+        self.solids
+            .iter()
+            .copied()
+            .chain(
+                self.doors
+                    .iter()
+                    .filter(|door| door.blocks_player())
+                    .map(|door| door.moving_solid()),
+            )
+            .enumerate()
+            .filter_map(|(index, solid)| raycast_solid(origin, ray_dir, max_distance, solid, index))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, hit)| hit)
+    }
+
     pub fn portal_center(&self, hit: RayHit, portal_width: f32) -> Option<Vec2> {
         hit.portal_center(portal_width)?;
         let half_width = portal_width / 2.0;
