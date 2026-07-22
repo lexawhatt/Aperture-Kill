@@ -4,7 +4,7 @@ use crate::constants::{
     FILTH_ATTACK_COOLDOWN, FILTH_ATTACK_DAMAGE, FILTH_ATTACK_RANGE, FILTH_HEALTH, FILTH_SIZE,
     FILTH_SPEED,
 };
-use crate::game::level::{Level, Solid};
+use crate::game::level::{CollisionGeometry, Solid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnemyKind {
@@ -57,12 +57,17 @@ impl Enemy {
         )
     }
 
-    pub fn update(&mut self, dt: f32, player_pos: Vec2, level: &Level) -> Option<f32> {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        player_pos: Vec2,
+        collision: CollisionGeometry<'_>,
+    ) -> Option<f32> {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt).max(0.0);
 
         match self.kind {
-            EnemyKind::Filth => self.update_filth(dt, player_pos, level),
+            EnemyKind::Filth => self.update_filth(dt, player_pos, collision),
         }
     }
 
@@ -77,7 +82,12 @@ impl Enemy {
         self.health <= 0.0
     }
 
-    fn update_filth(&mut self, dt: f32, player_pos: Vec2, level: &Level) -> Option<f32> {
+    fn update_filth(
+        &mut self,
+        dt: f32,
+        player_pos: Vec2,
+        collision: CollisionGeometry<'_>,
+    ) -> Option<f32> {
         let to_player = player_pos - self.pos;
         let dir_x = to_player.x.signum();
 
@@ -85,7 +95,7 @@ impl Enemy {
         self.vel.y += crate::constants::GRAVITY * dt;
         self.pos += self.vel * dt;
         let half_size = self.half_size();
-        self.on_ground = level.resolve_actor_body(&mut self.pos, half_size, &mut self.vel);
+        self.on_ground = collision.resolve_actor_body(&mut self.pos, half_size, &mut self.vel);
 
         if to_player.length() <= FILTH_ATTACK_RANGE && self.attack_cooldown <= 0.0 {
             self.attack_cooldown = FILTH_ATTACK_COOLDOWN;

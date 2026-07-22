@@ -7,7 +7,7 @@ use crate::game::geometry::projected_extent;
 use crate::game::player::Player;
 use crate::game::portal::Portal;
 
-use super::{Level, RAY_EPSILON, Solid};
+use super::{CollisionGeometry, Level, RAY_EPSILON, Solid};
 
 impl Level {
     #[cfg(test)]
@@ -52,7 +52,9 @@ impl Level {
 
         self.try_uncrouch_player(player, portals);
     }
+}
 
+impl CollisionGeometry<'_> {
     pub fn resolve_actor_body(&self, center: &mut Vec2, half_size: Vec2, vel: &mut Vec2) -> bool {
         let mut on_ground = false;
 
@@ -62,7 +64,7 @@ impl Level {
             }
         }
 
-        for door in &self.doors {
+        for door in self.doors {
             if !door.blocks_player() {
                 continue;
             }
@@ -74,7 +76,9 @@ impl Level {
 
         on_ground
     }
+}
 
+impl Level {
     fn try_climb_step(
         &self,
         player: &mut Player,

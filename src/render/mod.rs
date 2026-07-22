@@ -171,6 +171,13 @@ impl Renderer {
 
     fn draw_world(&self, canvas: &mut Canvas<'_>, world: &World, editor_mode: bool) {
         canvas.seamless_portal_views(world);
+        let seamless_portals = world
+            .level
+            .world_portals
+            .iter()
+            .copied()
+            .filter(|portal| portal.seamless)
+            .collect::<Vec<_>>();
 
         // Static geometry is drawn first so portals and actors stay readable.
         for solid in &world.level.solids {
@@ -183,7 +190,7 @@ impl Renderer {
                 *solid,
                 fill,
                 Color::rgb(92, 105, 125),
-                &world.level.world_portals,
+                &seamless_portals,
             );
         }
 

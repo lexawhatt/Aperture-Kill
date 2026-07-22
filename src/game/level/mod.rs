@@ -20,6 +20,8 @@ pub struct Solid {
     rotation: f32,
     axis_x: Vec2,
     axis_y: Vec2,
+    aabb_min: Vec2,
+    aabb_max: Vec2,
 }
 
 impl Solid {
@@ -31,6 +33,8 @@ impl Solid {
             portalable,
             axis_x: Vec2::X,
             axis_y: Vec2::Y,
+            aabb_min: Vec2::new(x, y),
+            aabb_max: Vec2::new(x + w, y + h),
         }
     }
 
@@ -42,6 +46,8 @@ impl Solid {
             portalable,
             axis_x: Vec2::X,
             axis_y: Vec2::Y,
+            aabb_min: Vec2::new(x, y),
+            aabb_max: Vec2::new(x + w, y + h),
         };
         solid.set_rotation(rotation);
         solid
@@ -54,6 +60,7 @@ impl Solid {
         let (sin, cos) = rotation.sin_cos();
         self.axis_x = Vec2::new(cos, sin);
         self.axis_y = Vec2::new(-sin, cos);
+        self.refresh_bounds();
     }
 
     pub fn rotation(self) -> f32 {
@@ -69,16 +76,22 @@ impl Solid {
     }
 
     pub fn set_pos(&mut self, pos: Vec2) {
+        let offset = pos - self.pos;
         self.pos = pos;
+        self.aabb_min += offset;
+        self.aabb_max += offset;
     }
 
     pub fn translate(&mut self, offset: Vec2) {
         self.pos += offset;
+        self.aabb_min += offset;
+        self.aabb_max += offset;
     }
 
     pub fn set_centered_rect(&mut self, center: Vec2, size: Vec2) {
         self.size = Vec2::new(size.x.max(1.0), size.y.max(1.0));
         self.pos = center - self.size / 2.0;
+        self.refresh_bounds();
     }
 
     pub fn basis(self) -> (Vec2, Vec2) {
@@ -130,10 +143,7 @@ impl Solid {
     }
 
     pub fn bounds(self) -> (Vec2, Vec2) {
-        self.corners().into_iter().fold(
-            (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
-            |(min, max), corner| (min.min(corner), max.max(corner)),
-        )
+        (self.aabb_min, self.aabb_max)
     }
 
     pub fn overlaps_body_bounds(self, center: Vec2, half_size: Vec2) -> bool {
@@ -160,6 +170,18 @@ impl Solid {
 
             player_extent + solid_extent - delta.abs() > 0.0
         })
+    }
+
+    fn refresh_bounds(&mut self) {
+        let half_size = self.size / 2.0;
+        let center = self.center();
+        let extent = Vec2::new(
+            self.axis_x.x.abs() * half_size.x + self.axis_y.x.abs() * half_size.y,
+            self.axis_x.y.abs() * half_size.x + self.axis_y.y.abs() * half_size.y,
+        );
+
+        self.aabb_min = center - extent;
+        self.aabb_max = center + extent;
     }
 }
 
@@ -246,9 +268,9 @@ impl Door {
             0.0
         }
         .clamp(0.0, 1.0);
-        let slide = solid.axis_y() * -(solid.size.y + 8.0) * open;
+        let slide = solid.axis_y() * -(solid.size().y + 8.0) * open;
 
-        solid.pos += slide;
+        solid.translate(slide);
         solid
     }
 
@@ -358,6 +380,18 @@ pub struct Level {
     pub enemies: Vec<Enemy>,
     pub texts: Vec<LevelText>,
     pub world_portals: Vec<WorldPortal>,
+}
+
+#[derive(Clone, Copy)]
+pub struct CollisionGeometry<'a> {
+    pub(super) solids: &'a [Solid],
+    pub(super) doors: &'a [Door],
+}
+
+impl<'a> CollisionGeometry<'a> {
+    pub fn new(solids: &'a [Solid], doors: &'a [Door]) -> Self {
+        Self { solids, doors }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -478,5 +512,30 @@ mod tests {
         assert_eq!(hit.portal_center(0.0), None);
         assert_eq!(hit.portal_center(f32::NAN), None);
         assert_eq!(hit.portal_center(64.0), None);
+    }
+
+    #[test]
+    fn solid_bounds_track_rotation_translation_and_resize() {
+        let mut solid = Solid::rotated(10.0, 20.0, 80.0, 24.0, std::f32::consts::FRAC_PI_4, true);
+
+        assert_bounds_contain_corners(solid);
+
+        solid.translate(Vec2::new(30.0, -12.0));
+        assert_bounds_contain_corners(solid);
+
+        solid.set_centered_rect(Vec2::new(100.0, 160.0), Vec2::new(120.0, 36.0));
+        solid.set_rotation(std::f32::consts::FRAC_PI_6);
+        assert_bounds_contain_corners(solid);
+    }
+
+    fn assert_bounds_contain_corners(solid: Solid) {
+        let (min, max) = solid.bounds();
+
+        for corner in solid.corners() {
+            assert!(corner.x >= min.x - RAY_EPSILON);
+            assert!(corner.x <= max.x + RAY_EPSILON);
+            assert!(corner.y >= min.y - RAY_EPSILON);
+            assert!(corner.y <= max.y + RAY_EPSILON);
+        }
     }
 }

@@ -31,6 +31,11 @@ const PIERCER_SHOT_3: &[u8] = include_bytes!("../../assets/sounds/weapons/Shoot1
 const FILTH_BITE: &[u8] =
     include_bytes!("../../assets/sounds/enemies/Zombie_Weak_Death_Reverse.wav");
 
+struct OneShotSound {
+    bytes: &'static [u8],
+    volume: f32,
+}
+
 pub(super) struct Audio {
     _stream: Option<OutputStream>,
     handle: Option<OutputStreamHandle>,
@@ -141,27 +146,37 @@ impl Audio {
     }
 
     pub(super) fn play(&mut self, event: SoundEvent, listener: Vec2) {
+        if self.handle_control_event(event, listener) {
+            return;
+        }
+
+        let Some(sound) = self.one_shot_sound(event, listener) else {
+            return;
+        };
+
+        self.play_one_shot(sound.bytes, sound.volume);
+    }
+
+    fn handle_control_event(&mut self, event: SoundEvent, listener: Vec2) -> bool {
         match event {
             SoundEvent::DoorOpen { index, pos } => {
                 self.start_door(index, DOOR_OPEN, 1.0 * attenuation(pos, listener));
-                return;
+                true
             }
             SoundEvent::DoorClose { index, pos } => {
                 self.start_door(index, DOOR_CLOSE, 1.0 * attenuation(pos, listener));
-                return;
+                true
             }
             SoundEvent::DoorStop { index } => {
                 // Door sinks are keyed by door index so completion events can stop the right sound.
                 self.stop_door(index);
-                return;
+                true
             }
             SoundEvent::DashStart(pos) => {
                 self.play_one_shot(DASH, 0.92 * attenuation(pos, listener));
-                return;
+                true
             }
-            SoundEvent::DashEnd => {
-                return;
-            }
+            SoundEvent::DashEnd => true,
             SoundEvent::SlideStart(pos) => {
                 self.start_action(
                     ActionSound::Slide,
@@ -169,11 +184,11 @@ impl Audio {
                     0.42 * attenuation(pos, listener),
                     true,
                 );
-                return;
+                true
             }
             SoundEvent::SlideEnd => {
                 self.stop_action(ActionSound::Slide);
-                return;
+                true
             }
             SoundEvent::GroundSlamStart(pos) => {
                 self.start_action(
@@ -182,11 +197,11 @@ impl Audio {
                     0.42 * attenuation(pos, listener),
                     true,
                 );
-                return;
+                true
             }
             SoundEvent::GroundSlamEnd => {
                 self.stop_action(ActionSound::GroundSlam);
-                return;
+                true
             }
             SoundEvent::PiercerChargeStart(pos) => {
                 self.start_action(
@@ -195,38 +210,37 @@ impl Audio {
                     0.64 * attenuation(pos, listener),
                     true,
                 );
-                return;
+                true
             }
             SoundEvent::PiercerChargeStop => {
                 self.stop_action(ActionSound::PiercerCharge);
-                return;
+                true
             }
             SoundEvent::DeathSequence => {
                 self.stop_actions();
                 self.stop_death();
                 self.start_death_sound(DeathSound::CameraCut, DEATH_CAMERA_CUT, 0.72);
                 self.start_death_sound(DeathSound::Sequence, DEATH_SEQUENCE, 0.94);
-                return;
+                true
             }
             SoundEvent::DeathSkull => {
                 self.start_death_sound(DeathSound::Skull, DEATH_SKULL, 0.86);
-                return;
+                true
             }
             SoundEvent::DeathStop => {
                 self.stop_death();
-                return;
+                true
             }
-            _ => {}
+            _ => false,
         }
+    }
 
-        let (bytes, volume): (&'static [u8], f32) = match event {
-            SoundEvent::Footstep(index, pos) => match index % 3 {
-                0 => (FOOTSTEP_1, 0.48 * attenuation(pos, listener)),
-                1 => (FOOTSTEP_2, 0.48 * attenuation(pos, listener)),
-                _ => (FOOTSTEP_3, 0.48 * attenuation(pos, listener)),
-            },
+    fn one_shot_sound(&mut self, event: SoundEvent, listener: Vec2) -> Option<OneShotSound> {
+        let (bytes, volume) = match event {
+            SoundEvent::Footstep(index, pos) => {
+                (footstep_sound(index), 0.48 * attenuation(pos, listener))
+            }
             SoundEvent::Jump(pos) => (JUMP, 0.78 * attenuation(pos, listener)),
-            SoundEvent::Land => return,
             SoundEvent::HeavyLand(pos) => (LAND_HEAVY, 0.72 * attenuation(pos, listener)),
             SoundEvent::PortalFire(pos) => (PORTAL_FIRE, 0.72 * attenuation(pos, listener)),
             SoundEvent::PortalPlace(pos) => (PORTAL_PLACE, 0.82 * attenuation(pos, listener)),
@@ -235,7 +249,8 @@ impl Audio {
             SoundEvent::PiercerFire(pos) | SoundEvent::PiercerCharged(pos) => {
                 (self.next_piercer_shot(), 0.72 * attenuation(pos, listener))
             }
-            SoundEvent::DoorOpen { .. }
+            SoundEvent::Land
+            | SoundEvent::DoorOpen { .. }
             | SoundEvent::DoorClose { .. }
             | SoundEvent::DoorStop { .. }
             | SoundEvent::DashStart(_)
@@ -248,9 +263,10 @@ impl Audio {
             | SoundEvent::PiercerChargeStop
             | SoundEvent::DeathSequence
             | SoundEvent::DeathSkull
-            | SoundEvent::DeathStop => return,
+            | SoundEvent::DeathStop => return None,
         };
-        self.play_one_shot(bytes, volume);
+
+        Some(OneShotSound { bytes, volume })
     }
 
     fn play_one_shot(&self, bytes: &'static [u8], volume: f32) {
@@ -496,5 +512,13 @@ fn attenuation(source: Vec2, listener: Vec2) -> f32 {
 }
 
 fn volume_factor(value: u8) -> f32 {
-    (value.min(100) as f32) / 100.0
+    f32::from(value.min(100)) / 100.0
+}
+
+fn footstep_sound(index: usize) -> &'static [u8] {
+    match index % 3 {
+        0 => FOOTSTEP_1,
+        1 => FOOTSTEP_2,
+        _ => FOOTSTEP_3,
+    }
 }

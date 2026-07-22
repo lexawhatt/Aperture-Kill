@@ -213,28 +213,87 @@ impl WorldClip {
             }
         }
 
-        !self
-            .walls
-            .iter()
-            .any(|solid| segment_hits_solid(offset, *solid, self.origin))
+        self.walls.is_empty()
+            || !self
+                .walls
+                .iter()
+                .any(|solid| segment_hits_solid(offset, *solid, self.origin))
     }
 }
 
 fn segment_hits_solid(offset: Vec2, solid: Solid, origin: Vec2) -> bool {
-    let length = offset.length();
-    if length <= 1.0 {
+    if offset.length_squared() <= 1.0 {
         return false;
     }
 
-    let steps = (length / 8.0).ceil().clamp(2.0, 96.0) as usize;
-    for step in 1..steps {
-        let t = step as f32 / steps as f32;
-        let point = origin + offset * t;
+    let end = origin + offset;
+    let segment_min = origin.min(end);
+    let segment_max = origin.max(end);
+    let (solid_min, solid_max) = solid.bounds();
+    if segment_max.x < solid_min.x
+        || segment_min.x > solid_max.x
+        || segment_max.y < solid_min.y
+        || segment_min.y > solid_max.y
+    {
+        return false;
+    }
 
-        if solid.contains_point(point) {
-            return true;
+    let local_origin = solid.local_from_world(origin);
+    let local_end = solid.local_from_world(end);
+    let local_dir = local_end - local_origin;
+    let size = solid.size();
+    let mut enter: f32 = 0.0;
+    let mut exit: f32 = 1.0;
+
+    for axis in 0..2 {
+        let origin_axis = local_origin[axis];
+        let dir_axis = local_dir[axis];
+        let min_axis = 0.0;
+        let max_axis = size[axis];
+
+        if dir_axis.abs() < 0.001 {
+            if origin_axis < min_axis || origin_axis > max_axis {
+                return false;
+            }
+            continue;
+        }
+
+        let inv_dir = 1.0 / dir_axis;
+        let t1 = (min_axis - origin_axis) * inv_dir;
+        let t2 = (max_axis - origin_axis) * inv_dir;
+        let near = t1.min(t2);
+        let far = t1.max(t2);
+
+        enter = enter.max(near);
+        exit = exit.min(far);
+
+        if enter > exit {
+            return false;
         }
     }
 
-    false
+    exit > 0.001 && enter < 0.999
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::Vec2;
+
+    use super::WorldClip;
+    use crate::game::level::Solid;
+
+    #[test]
+    fn clip_wall_blocks_segment_without_sampling() {
+        let wall = Solid::new(-6.0, 32.0, 12.0, 18.0, true);
+        let clip = WorldClip::behind_portal(
+            Vec2::ZERO,
+            Vec2::new(0.0, -1.0),
+            128.0,
+            180.0,
+            Vec::from([wall]),
+        );
+
+        assert!(!clip.allows(Vec2::new(0.0, 60.0)));
+        assert!(clip.allows(Vec2::new(70.0, 60.0)));
+    }
 }

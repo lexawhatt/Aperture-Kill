@@ -15,7 +15,7 @@ use crate::constants::{
     PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
     PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_WIDTH,
 };
-use crate::game::level::{DoorEvent, Level};
+use crate::game::level::{CollisionGeometry, DoorEvent, Level};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
 use crate::game::portal::{Color, Portal};
@@ -40,6 +40,7 @@ pub struct World {
     footstep_index: usize,
     camera_shift: glam::Vec2,
     world_portal_cooldown: u8,
+    collision_portals: Vec<Portal>,
 }
 
 #[derive(Clone, Copy)]
@@ -225,6 +226,7 @@ impl World {
             footstep_index: 0,
             camera_shift: glam::Vec2::ZERO,
             world_portal_cooldown: 0,
+            collision_portals: Vec::new(),
         }
     }
 
@@ -242,6 +244,7 @@ impl World {
         self.footstep_index = 0;
         self.camera_shift = glam::Vec2::ZERO;
         self.world_portal_cooldown = 0;
+        self.collision_portals.clear();
     }
 
     pub fn update(&mut self, dt: f32, input: &Input, _screen_width: f32, _screen_height: f32) {
@@ -528,30 +531,25 @@ impl World {
     }
 
     fn resolve_player(&mut self) {
-        let world_portals =
-            self.level
-                .world_portals
-                .iter()
-                .enumerate()
-                .filter_map(|(index, portal)| {
-                    world_portal_receiver_index(&self.level.world_portals, index)
-                        .map(|_| portal.portal)
-                });
-
+        self.collision_portals.clear();
         if let [Some(source), Some(destination)] = self.portals {
-            let portals = [source, destination]
-                .into_iter()
-                .chain(world_portals)
-                .collect::<Vec<_>>();
-
-            self.level
-                .resolve_player_with_portals(&mut self.player, &portals);
-        } else {
-            let portals = world_portals.collect::<Vec<_>>();
-
-            self.level
-                .resolve_player_with_portals(&mut self.player, &portals);
+            self.collision_portals.extend([source, destination]);
         }
+
+        self.collision_portals
+            .extend(
+                self.level
+                    .world_portals
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, portal)| {
+                        world_portal_receiver_index(&self.level.world_portals, index)
+                            .map(|_| portal.portal)
+                    }),
+            );
+
+        self.level
+            .resolve_player_with_portals(&mut self.player, &self.collision_portals);
     }
 
     fn collect_player_events(&mut self) {
@@ -597,18 +595,10 @@ impl World {
     fn tick_enemies(&mut self, dt: f32) {
         let player_pos = self.player.pos;
         let mut damage = 0.0;
-        let level_view = Level {
-            solids: self.level.solids.clone(),
-            doors: self.level.doors.clone(),
-            hazards: Vec::new(),
-            checkpoints: Vec::new(),
-            enemies: Vec::new(),
-            texts: Vec::new(),
-            world_portals: Vec::new(),
-        };
+        let collision = CollisionGeometry::new(&self.level.solids, &self.level.doors);
 
         for enemy in &mut self.level.enemies {
-            if let Some(amount) = enemy.update(dt, player_pos, &level_view) {
+            if let Some(amount) = enemy.update(dt, player_pos, collision) {
                 damage += amount;
                 self.sound_events.push(SoundEvent::FilthBite(enemy.pos));
             }
