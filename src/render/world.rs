@@ -8,6 +8,7 @@ use crate::game::portal::{Color, Portal};
 use crate::game::{PiercerBeam, World};
 
 use super::canvas::{Canvas, Rect, WorldClip};
+use super::{PLAYER_OUTLINE, player_fill_color};
 
 const SEAMLESS_CUT_EPSILON: f32 = 2.0;
 
@@ -24,7 +25,9 @@ fn seamless_cuts_for_solid(solid: Solid, portals: &[WorldPortal]) -> Vec<Seamles
     portals
         .iter()
         .filter_map(|world_portal| {
-            if !world_portal.seamless || !portal_sits_on_solid(world_portal.portal, solid) {
+            if !world_portal.seamless
+                || !solid.supports_portal(world_portal.portal, SEAMLESS_CUT_EPSILON)
+            {
                 return None;
             }
 
@@ -290,7 +293,7 @@ impl Canvas<'_> {
                 continue;
             }
             let Some(destination_index) =
-                seamless_receiver_index(&world.level.world_portals, source_index)
+                WorldPortal::unique_receiver_index(&world.level.world_portals, source_index)
             else {
                 continue;
             };
@@ -399,17 +402,7 @@ impl Canvas<'_> {
             false,
         );
         if let Some(player_solid) = transformed_solid(from, to, player_solid) {
-            let fill = if player.is_ground_slamming() {
-                Color::rgb(255, 224, 102)
-            } else if player.is_dashing() {
-                Color::rgb(80, 92, 130)
-            } else if player.is_wall_sliding() {
-                Color::rgb(62, 76, 92)
-            } else {
-                Color::rgb(45, 49, 59)
-            };
-
-            self.solid(player_solid, fill, Color::rgb(235, 238, 245));
+            self.solid(player_solid, player_fill_color(player), PLAYER_OUTLINE);
         }
     }
 
@@ -525,18 +518,6 @@ impl Canvas<'_> {
     }
 }
 
-fn seamless_receiver_index(portals: &[WorldPortal], source_index: usize) -> Option<usize> {
-    let source = portals.get(source_index)?;
-    let mut receivers = portals
-        .iter()
-        .enumerate()
-        .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
-        .map(|(index, _)| index);
-    let receiver = receivers.next()?;
-
-    receivers.next().is_none().then_some(receiver)
-}
-
 fn transformed_solid(from: Portal, to: Portal, solid: Solid) -> Option<Solid> {
     let p0 = from.map_view_point_to(&to, solid.world_from_local(Vec2::ZERO));
     let p1 = from.map_view_point_to(&to, solid.world_from_local(Vec2::new(solid.size().x, 0.0)));
@@ -575,35 +556,10 @@ fn seamless_occluding_walls(world: &World, source: WorldPortal) -> Vec<Solid> {
         .iter()
         .copied()
         .filter(|solid| {
-            !portal_sits_on_solid(source.portal, *solid)
+            !solid.supports_portal(source.portal, SEAMLESS_CUT_EPSILON)
                 && solid_can_occlude_seamless_view(*solid, source)
         })
         .collect()
-}
-
-fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
-    let normal = portal.normal();
-    let surface_pos = portal.pos - normal * PORTAL_SURFACE_OFFSET;
-    let local = solid.local_from_world(surface_pos);
-    let axis_x = solid.axis_x();
-    let axis_y = solid.axis_y();
-
-    if local.x >= -SEAMLESS_CUT_EPSILON
-        && local.y >= -SEAMLESS_CUT_EPSILON
-        && local.x <= solid.size().x + SEAMLESS_CUT_EPSILON
-        && local.y <= solid.size().y + SEAMLESS_CUT_EPSILON
-    {
-        let on_left = local.x.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_x) > 0.95;
-        let on_right =
-            (local.x - solid.size().x).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_x) > 0.95;
-        let on_top = local.y.abs() < SEAMLESS_CUT_EPSILON && normal.dot(-axis_y) > 0.95;
-        let on_bottom =
-            (local.y - solid.size().y).abs() < SEAMLESS_CUT_EPSILON && normal.dot(axis_y) > 0.95;
-
-        return on_left || on_right || on_top || on_bottom;
-    }
-
-    false
 }
 
 fn rect_on_portal_side(rect: Rect, portal: Portal, outside: bool) -> Option<Rect> {

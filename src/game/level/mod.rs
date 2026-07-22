@@ -4,6 +4,7 @@ mod raycast;
 // Level geometry is stored in world space.
 use glam::Vec2;
 
+use crate::constants::PORTAL_SURFACE_OFFSET;
 use crate::game::enemy::Enemy;
 use crate::game::portal::{Color, Portal};
 
@@ -131,6 +132,32 @@ impl Solid {
         let local = self.local_from_world(point);
 
         local.x >= 0.0 && local.y >= 0.0 && local.x <= self.size.x && local.y <= self.size.y
+    }
+
+    pub fn supports_portal(self, portal: Portal, tolerance: f32) -> bool {
+        let tolerance = if tolerance.is_finite() && tolerance >= 0.0 {
+            tolerance
+        } else {
+            0.0
+        };
+        let normal = portal.normal();
+        let surface_pos = portal.pos - normal * PORTAL_SURFACE_OFFSET;
+        let local = self.local_from_world(surface_pos);
+
+        if local.x < -tolerance
+            || local.y < -tolerance
+            || local.x > self.size.x + tolerance
+            || local.y > self.size.y + tolerance
+        {
+            return false;
+        }
+
+        let on_left = local.x.abs() < tolerance && normal.dot(-self.axis_x) > 0.95;
+        let on_right = (local.x - self.size.x).abs() < tolerance && normal.dot(self.axis_x) > 0.95;
+        let on_top = local.y.abs() < tolerance && normal.dot(-self.axis_y) > 0.95;
+        let on_bottom = (local.y - self.size.y).abs() < tolerance && normal.dot(self.axis_y) > 0.95;
+
+        on_left || on_right || on_top || on_bottom
     }
 
     pub fn corners(self) -> [Vec2; 4] {
@@ -335,6 +362,70 @@ impl WorldPortal {
     pub fn set_center(&mut self, center: Vec2) {
         self.portal.pos = center;
     }
+
+    pub fn edit_solid(self) -> Solid {
+        let width = self.portal.active_width().max(24.0);
+        let size = Vec2::new(width, Self::EDIT_THICKNESS);
+        let center = self.center();
+
+        Solid::rotated(
+            center.x - size.x / 2.0,
+            center.y - size.y / 2.0,
+            size.x,
+            size.y,
+            self.portal.tangent().to_angle(),
+            false,
+        )
+    }
+
+    pub fn apply_edit_solid(&mut self, solid: Solid) {
+        let mut edited = Portal::with_tangent(
+            solid.center().x,
+            solid.center().y,
+            -solid.axis_y(),
+            solid.axis_x(),
+            solid.size().x.max(24.0),
+            self.portal.color,
+        );
+
+        edited.scale = self.portal.scale;
+        edited.scale_objects = self.portal.scale_objects;
+        self.portal = edited;
+    }
+
+    pub fn receiver_index(portals: &[Self], source_index: usize) -> Option<usize> {
+        let source = portals.get(source_index)?;
+
+        if source.seamless {
+            return Self::unique_receiver_index(portals, source_index);
+        }
+
+        Self::receiver_candidates(portals, source_index, source.receiver_id)
+            .max_by_key(|(_, portal)| portal.priority)
+            .map(|(index, _)| index)
+    }
+
+    pub fn unique_receiver_index(portals: &[Self], source_index: usize) -> Option<usize> {
+        let source = portals.get(source_index)?;
+        let mut receivers = Self::receiver_candidates(portals, source_index, source.receiver_id)
+            .map(|(index, _)| index);
+        let receiver = receivers.next()?;
+
+        receivers.next().is_none().then_some(receiver)
+    }
+
+    fn receiver_candidates(
+        portals: &[Self],
+        source_index: usize,
+        receiver_id: u16,
+    ) -> impl Iterator<Item = (usize, &Self)> {
+        portals
+            .iter()
+            .enumerate()
+            .filter(move |(index, portal)| *index != source_index && portal.id == receiver_id)
+    }
+
+    const EDIT_THICKNESS: f32 = 24.0;
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -528,6 +619,83 @@ mod tests {
         assert_bounds_contain_corners(solid);
     }
 
+    #[test]
+    fn solid_supports_portal_only_on_matching_surface() {
+        let solid = Solid::new(10.0, 20.0, 100.0, 40.0, true);
+        let surface = Vec2::new(60.0, 20.0);
+        let portal = Portal::new(
+            surface.x,
+            surface.y - PORTAL_SURFACE_OFFSET,
+            Vec2::new(0.0, -1.0),
+            48.0,
+            Color::BLUE,
+        );
+        let reversed = Portal::new(
+            surface.x,
+            surface.y + PORTAL_SURFACE_OFFSET,
+            Vec2::Y,
+            48.0,
+            Color::BLUE,
+        );
+
+        assert!(solid.supports_portal(portal, RAY_EPSILON));
+        assert!(!solid.supports_portal(reversed, RAY_EPSILON));
+    }
+
+    #[test]
+    fn world_portal_receiver_uses_priority_for_non_seamless() {
+        let mut source = WorldPortal::new(0.0, 0.0, Vec2::Y, 32.0, 1);
+        source.receiver_id = 7;
+        let mut low = WorldPortal::new(100.0, 0.0, Vec2::Y, 32.0, 7);
+        low.priority = 1;
+        let mut high = WorldPortal::new(200.0, 0.0, Vec2::Y, 32.0, 7);
+        high.priority = 4;
+        let portals = [source, low, high];
+
+        assert_eq!(WorldPortal::receiver_index(&portals, 0), Some(2));
+    }
+
+    #[test]
+    fn seamless_world_portal_requires_unique_receiver() {
+        let mut source = WorldPortal::new(0.0, 0.0, Vec2::Y, 32.0, 1);
+        source.receiver_id = 7;
+        source.seamless = true;
+        let receiver = WorldPortal::new(100.0, 0.0, Vec2::Y, 32.0, 7);
+        let duplicate = WorldPortal::new(200.0, 0.0, Vec2::Y, 32.0, 7);
+
+        assert_eq!(WorldPortal::receiver_index(&[source, receiver], 0), Some(1));
+        assert_eq!(
+            WorldPortal::receiver_index(&[source, receiver, duplicate], 0),
+            None
+        );
+    }
+
+    #[test]
+    fn world_portal_edit_solid_round_trips_geometry() {
+        let mut portal = WorldPortal::new(120.0, 80.0, Vec2::new(1.0, 0.0), 64.0, 1);
+        portal.portal.scale = 1.5;
+        portal.portal.scale_objects = true;
+        let mut edit_solid = portal.edit_solid();
+
+        assert_eq!(edit_solid.center(), portal.center());
+        assert_eq!(
+            edit_solid.size(),
+            Vec2::new(64.0, WorldPortal::EDIT_THICKNESS)
+        );
+
+        edit_solid.set_centered_rect(Vec2::new(200.0, 140.0), Vec2::new(88.0, 24.0));
+        edit_solid.set_rotation(std::f32::consts::FRAC_PI_4);
+        portal.apply_edit_solid(edit_solid);
+
+        assert_vec2_near(portal.center(), Vec2::new(200.0, 140.0));
+        assert!((portal.portal.active_width() - 88.0).abs() < RAY_EPSILON);
+        assert!(
+            (portal.portal.tangent().to_angle() - std::f32::consts::FRAC_PI_4).abs() < RAY_EPSILON
+        );
+        assert_eq!(portal.portal.scale, 1.5);
+        assert!(portal.portal.scale_objects);
+    }
+
     fn assert_bounds_contain_corners(solid: Solid) {
         let (min, max) = solid.bounds();
 
@@ -537,5 +705,10 @@ mod tests {
             assert!(corner.y >= min.y - RAY_EPSILON);
             assert!(corner.y <= max.y + RAY_EPSILON);
         }
+    }
+
+    fn assert_vec2_near(actual: Vec2, expected: Vec2) {
+        assert!((actual.x - expected.x).abs() < RAY_EPSILON);
+        assert!((actual.y - expected.y).abs() < RAY_EPSILON);
     }
 }

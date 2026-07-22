@@ -2,7 +2,6 @@ use glam::Vec2;
 
 // Collision resolves real solids, but active portals can open a wall.
 use crate::constants::CLIMBSTEP_HEIGHT;
-use crate::constants::PORTAL_SURFACE_OFFSET;
 use crate::game::geometry::projected_extent;
 use crate::game::player::Player;
 use crate::game::portal::Portal;
@@ -187,33 +186,10 @@ fn portal_opens_collision(
 
     portals.iter().any(|portal| {
         // A portal opens only its front face; the back side of the same wall still blocks.
-        portal_sits_on_solid(*portal, solid)
+        solid.supports_portal(*portal, RAY_EPSILON)
             && correction_normal.dot(portal.normal()) > 0.92
             && portal.opens_for_body(center, half_size)
     })
-}
-
-fn portal_sits_on_solid(portal: Portal, solid: Solid) -> bool {
-    let normal = portal.normal();
-    let surface_pos = portal.pos - normal * PORTAL_SURFACE_OFFSET;
-    let local = solid.local_from_world(surface_pos);
-    let axis_x = solid.axis_x();
-    let axis_y = solid.axis_y();
-
-    if local.x >= -RAY_EPSILON
-        && local.y >= -RAY_EPSILON
-        && local.x <= solid.size().x + RAY_EPSILON
-        && local.y <= solid.size().y + RAY_EPSILON
-    {
-        let on_left = local.x.abs() < RAY_EPSILON && normal.dot(-axis_x) > 0.95;
-        let on_right = (local.x - solid.size().x).abs() < RAY_EPSILON && normal.dot(axis_x) > 0.95;
-        let on_top = local.y.abs() < RAY_EPSILON && normal.dot(-axis_y) > 0.95;
-        let on_bottom = (local.y - solid.size().y).abs() < RAY_EPSILON && normal.dot(axis_y) > 0.95;
-
-        return on_left || on_right || on_top || on_bottom;
-    }
-
-    false
 }
 
 fn body_solid_overlap(center: Vec2, half_size: Vec2, solid: Solid) -> Option<Vec2> {

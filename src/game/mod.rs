@@ -15,7 +15,7 @@ use crate::constants::{
     PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
     PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_WIDTH,
 };
-use crate::game::level::{CollisionGeometry, DoorEvent, Level};
+use crate::game::level::{CollisionGeometry, DoorEvent, Level, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
 use crate::game::portal::{Color, Portal};
@@ -505,7 +505,7 @@ impl World {
             let Some(time) = source.portal.crossing_time(previous, current, half_size) else {
                 continue;
             };
-            let Some(destination_index) = world_portal_receiver_index(portals, source_index) else {
+            let Some(destination_index) = WorldPortal::receiver_index(portals, source_index) else {
                 continue;
             };
 
@@ -543,7 +543,7 @@ impl World {
                     .iter()
                     .enumerate()
                     .filter_map(|(index, portal)| {
-                        world_portal_receiver_index(&self.level.world_portals, index)
+                        WorldPortal::receiver_index(&self.level.world_portals, index)
                             .map(|_| portal.portal)
                     }),
             );
@@ -731,29 +731,4 @@ fn ray_hits_enemy(
     }
 
     (t_min >= 0.0 && t_min <= max_distance).then_some(t_min)
-}
-
-fn world_portal_receiver_index(
-    portals: &[crate::game::level::WorldPortal],
-    source_index: usize,
-) -> Option<usize> {
-    let source = portals.get(source_index)?;
-    if source.seamless {
-        let mut receivers = portals
-            .iter()
-            .enumerate()
-            .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
-            .map(|(index, _)| index);
-        let receiver = receivers.next()?;
-
-        return receivers.next().is_none().then_some(receiver);
-    }
-
-    // Receiver ID forms a channel; priority resolves multiple exits on that channel.
-    portals
-        .iter()
-        .enumerate()
-        .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
-        .max_by_key(|(_, portal)| portal.priority)
-        .map(|(index, _)| index)
 }

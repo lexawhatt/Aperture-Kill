@@ -10,11 +10,18 @@ use glam::Vec2;
 use crate::game::World;
 use crate::game::level::WorldPortal;
 use crate::game::levels::LevelSpec;
+use crate::game::player::Player;
 use crate::game::portal::{Color, Portal};
 use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings};
 
 use canvas::{Canvas, Rect};
+
+const PLAYER_SLAM_FILL: Color = Color::rgb(255, 224, 102);
+const PLAYER_DASH_FILL: Color = Color::rgb(80, 92, 130);
+const PLAYER_WALL_SLIDE_FILL: Color = Color::rgb(62, 76, 92);
+const PLAYER_DEFAULT_FILL: Color = Color::rgb(45, 49, 59);
+const PLAYER_OUTLINE: Color = Color::rgb(235, 238, 245);
 
 pub struct Renderer;
 
@@ -259,31 +266,22 @@ impl Renderer {
             pos: player.pos - player.half_size(),
             size: player.size,
         };
-        let fill = if player.is_ground_slamming() {
-            Color::rgb(255, 224, 102)
-        } else if player.is_dashing() {
-            Color::rgb(80, 92, 130)
-        } else if player.is_wall_sliding() {
-            Color::rgb(62, 76, 92)
-        } else {
-            Color::rgb(45, 49, 59)
-        };
-        let outline = Color::rgb(235, 238, 245);
+        let fill = player_fill_color(player);
 
         if let [Some(source), Some(destination)] = world.portals {
             if source.opens_for_body(player.pos, player.half_size()) {
-                canvas.player_rect_through_portal(rect, source, destination, fill, outline);
+                canvas.player_rect_through_portal(rect, source, destination, fill, PLAYER_OUTLINE);
             } else if destination.opens_for_body(player.pos, player.half_size()) {
-                canvas.player_rect_through_portal(rect, destination, source, fill, outline);
+                canvas.player_rect_through_portal(rect, destination, source, fill, PLAYER_OUTLINE);
             } else if let Some((source, destination)) = active_world_portal_for_body(world) {
-                canvas.player_rect_through_portal(rect, source, destination, fill, outline);
+                canvas.player_rect_through_portal(rect, source, destination, fill, PLAYER_OUTLINE);
             } else {
-                canvas.player_rect(rect, fill, outline);
+                canvas.player_rect(rect, fill, PLAYER_OUTLINE);
             }
         } else if let Some((source, destination)) = active_world_portal_for_body(world) {
-            canvas.player_rect_through_portal(rect, source, destination, fill, outline);
+            canvas.player_rect_through_portal(rect, source, destination, fill, PLAYER_OUTLINE);
         } else {
-            canvas.player_rect(rect, fill, outline);
+            canvas.player_rect(rect, fill, PLAYER_OUTLINE);
         }
 
         if player.slam_storage_ready() {
@@ -324,32 +322,23 @@ fn active_world_portal_for_body(world: &World) -> Option<(Portal, Portal)> {
                 return None;
             }
             let destination_index =
-                world_portal_receiver_index(&world.level.world_portals, source_index)?;
+                WorldPortal::receiver_index(&world.level.world_portals, source_index)?;
             let destination = world.level.world_portals.get(destination_index)?;
 
             Some((source.portal, destination.portal))
         })
 }
 
-fn world_portal_receiver_index(portals: &[WorldPortal], source_index: usize) -> Option<usize> {
-    let source = portals.get(source_index)?;
-    if source.seamless {
-        let mut receivers = portals
-            .iter()
-            .enumerate()
-            .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
-            .map(|(index, _)| index);
-        let receiver = receivers.next()?;
-
-        return receivers.next().is_none().then_some(receiver);
+fn player_fill_color(player: &Player) -> Color {
+    if player.is_ground_slamming() {
+        PLAYER_SLAM_FILL
+    } else if player.is_dashing() {
+        PLAYER_DASH_FILL
+    } else if player.is_wall_sliding() {
+        PLAYER_WALL_SLIDE_FILL
+    } else {
+        PLAYER_DEFAULT_FILL
     }
-
-    portals
-        .iter()
-        .enumerate()
-        .filter(|(index, portal)| *index != source_index && portal.id == source.receiver_id)
-        .max_by_key(|(_, portal)| portal.priority)
-        .map(|(index, _)| index)
 }
 
 impl Color {

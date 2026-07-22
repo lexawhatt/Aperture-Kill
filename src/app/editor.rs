@@ -6,15 +6,12 @@ use winit::keyboard::KeyCode;
 // Editor stores mode state and applies commands to level objects.
 use crate::constants::PORTAL_WIDTH;
 use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
-use crate::game::portal::Portal;
 
 use super::editor_geometry::{
     EditorDrag, EditorMoveStart, EditorSelection, SolidHit, drag_from_hit, rect_intersects_rect,
     resized_local_bounds, selection_rect, snap, snap_angle, snap_delta, solid_at,
     solid_intersects_rect, text_at, text_bounds,
 };
-
-const WORLD_PORTAL_EDIT_THICKNESS: f32 = 24.0;
 
 pub(super) struct Editor {
     selected: Vec<EditorSelection>,
@@ -248,7 +245,7 @@ impl Editor {
                 };
                 if let EditorSelection::WorldPortal(index) = selection {
                     if let Some(portal) = level.world_portals.get_mut(index) {
-                        let mut solid = world_portal_edit_solid(*portal);
+                        let mut solid = portal.edit_solid();
 
                         Self::resize_solid(
                             &mut solid,
@@ -259,7 +256,7 @@ impl Editor {
                             *start_cursor,
                             grid_snap,
                         );
-                        apply_edit_solid_to_world_portal(portal, solid);
+                        portal.apply_edit_solid(solid);
                         self.dirty = true;
                     }
                 } else if let Some(solid) = Self::solid_like_mut(level, selection) {
@@ -285,7 +282,7 @@ impl Editor {
                 };
                 if let EditorSelection::WorldPortal(index) = selection {
                     if let Some(portal) = level.world_portals.get_mut(index) {
-                        let mut solid = world_portal_edit_solid(*portal);
+                        let mut solid = portal.edit_solid();
 
                         Self::rotate_solid(
                             &mut solid,
@@ -295,7 +292,7 @@ impl Editor {
                             *start_angle,
                             grid_snap,
                         );
-                        apply_edit_solid_to_world_portal(portal, solid);
+                        portal.apply_edit_solid(solid);
                         self.dirty = true;
                     }
                 } else if let EditorSelection::Solid(index) = selection
@@ -351,30 +348,7 @@ impl Editor {
         }
 
         self.save_undo(level);
-        let mut solids = Vec::new();
-        let mut doors = Vec::new();
-        let mut hazards = Vec::new();
-        let mut checkpoints = Vec::new();
-        let mut texts = Vec::new();
-        let mut world_portals = Vec::new();
-
-        for selection in self.valid_selected(level) {
-            match selection {
-                EditorSelection::Solid(index) => solids.push(index),
-                EditorSelection::Door(index) => doors.push(index),
-                EditorSelection::Hazard(index) => hazards.push(index),
-                EditorSelection::Checkpoint(index) => checkpoints.push(index),
-                EditorSelection::Text(index) => texts.push(index),
-                EditorSelection::WorldPortal(index) => world_portals.push(index),
-            }
-        }
-
-        remove_indices(&mut level.solids, solids);
-        remove_indices(&mut level.doors, doors);
-        remove_indices(&mut level.hazards, hazards);
-        remove_indices(&mut level.checkpoints, checkpoints);
-        remove_indices(&mut level.texts, texts);
-        remove_indices(&mut level.world_portals, world_portals);
+        SelectionBuckets::from_selected(self.valid_selected(level)).remove_from(level);
         self.clear_selection();
         self.dirty = true;
     }
@@ -491,13 +465,10 @@ impl Editor {
     }
 
     pub(super) fn toggle_portalable(&mut self, level: &mut Level) {
-        let selected = self.valid_selected(level);
-        let solid_indices = selected
+        let solid_indices = self
+            .valid_selected(level)
             .into_iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Solid(index) => Some(index),
-                _ => None,
-            })
+            .filter_map(EditorSelection::solid_index)
             .collect::<Vec<_>>();
         if solid_indices.is_empty() {
             return;
@@ -774,63 +745,31 @@ impl Editor {
     }
 
     pub(super) fn selected_solids(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Solid(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::solid_index)
     }
 
     pub(super) fn selected_doors(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Door(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::door_index)
     }
 
     pub(super) fn selected_hazards(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Hazard(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::hazard_index)
     }
 
     pub(super) fn selected_checkpoints(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Checkpoint(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::checkpoint_index)
     }
 
     pub(super) fn selected_texts(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::Text(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::text_index)
     }
 
     pub(super) fn selected_world_portals(&self) -> Vec<usize> {
-        self.selected
-            .iter()
-            .filter_map(|selection| match selection {
-                EditorSelection::WorldPortal(index) => Some(*index),
-                _ => None,
-            })
-            .collect()
+        self.selected_indices(EditorSelection::world_portal_index)
+    }
+
+    fn selected_indices(&self, index_of: fn(EditorSelection) -> Option<usize>) -> Vec<usize> {
+        self.selected.iter().copied().filter_map(index_of).collect()
     }
 
     pub(super) fn selection_count(&self) -> usize {
@@ -931,8 +870,7 @@ impl Editor {
                 .enumerate()
                 .rev()
                 .find_map(|(index, portal)| {
-                    solid_at(pos, world_portal_edit_solid(*portal), self.rotate_ui)
-                        .map(|hit| (index, hit))
+                    solid_at(pos, portal.edit_solid(), self.rotate_ui).map(|hit| (index, hit))
                 })
         {
             return Some((EditorSelection::WorldPortal(index), hit));
@@ -1028,7 +966,7 @@ impl Editor {
                 .world_portals
                 .get(index)
                 .copied()
-                .map(|portal| drag_from_hit(hit, pos, world_portal_edit_solid(portal)))
+                .map(|portal| drag_from_hit(hit, pos, portal.edit_solid()))
                 .unwrap_or(EditorDrag::None),
         }
     }
@@ -1488,6 +1426,48 @@ fn remove_indices<T>(items: &mut Vec<T>, mut indices: Vec<usize>) {
     }
 }
 
+#[derive(Default)]
+struct SelectionBuckets {
+    solids: Vec<usize>,
+    doors: Vec<usize>,
+    hazards: Vec<usize>,
+    checkpoints: Vec<usize>,
+    texts: Vec<usize>,
+    world_portals: Vec<usize>,
+}
+
+impl SelectionBuckets {
+    fn from_selected(selected: impl IntoIterator<Item = EditorSelection>) -> Self {
+        let mut buckets = Self::default();
+
+        for selection in selected {
+            buckets.push(selection);
+        }
+
+        buckets
+    }
+
+    fn push(&mut self, selection: EditorSelection) {
+        match selection {
+            EditorSelection::Solid(index) => self.solids.push(index),
+            EditorSelection::Door(index) => self.doors.push(index),
+            EditorSelection::Hazard(index) => self.hazards.push(index),
+            EditorSelection::Checkpoint(index) => self.checkpoints.push(index),
+            EditorSelection::Text(index) => self.texts.push(index),
+            EditorSelection::WorldPortal(index) => self.world_portals.push(index),
+        }
+    }
+
+    fn remove_from(self, level: &mut Level) {
+        remove_indices(&mut level.solids, self.solids);
+        remove_indices(&mut level.doors, self.doors);
+        remove_indices(&mut level.hazards, self.hazards);
+        remove_indices(&mut level.checkpoints, self.checkpoints);
+        remove_indices(&mut level.texts, self.texts);
+        remove_indices(&mut level.world_portals, self.world_portals);
+    }
+}
+
 fn selection_sort_key(selection: &EditorSelection) -> (usize, usize) {
     match selection {
         EditorSelection::Solid(index) => (0, *index),
@@ -1553,7 +1533,7 @@ fn include_solid_bounds(solid: Solid, min: &mut Vec2, max: &mut Vec2) {
 }
 
 fn world_portal_bounds(portal: WorldPortal) -> (Vec2, Vec2) {
-    let corners = world_portal_edit_solid(portal).corners();
+    let corners = portal.edit_solid().corners();
     let min = corners
         .iter()
         .copied()
@@ -1566,36 +1546,6 @@ fn world_portal_bounds(portal: WorldPortal) -> (Vec2, Vec2) {
         .unwrap_or(portal.center());
 
     (min, max)
-}
-
-fn world_portal_edit_solid(portal: WorldPortal) -> Solid {
-    let width = portal.portal.active_width().max(24.0);
-    let size = Vec2::new(width, WORLD_PORTAL_EDIT_THICKNESS);
-    let center = portal.center();
-
-    Solid::rotated(
-        center.x - size.x / 2.0,
-        center.y - size.y / 2.0,
-        size.x,
-        size.y,
-        portal.portal.tangent().to_angle(),
-        false,
-    )
-}
-
-fn apply_edit_solid_to_world_portal(portal: &mut WorldPortal, solid: Solid) {
-    let mut edited = Portal::with_tangent(
-        solid.center().x,
-        solid.center().y,
-        -solid.axis_y(),
-        solid.axis_x(),
-        solid.size().x.max(24.0),
-        portal.portal.color,
-    );
-
-    edited.scale = portal.portal.scale;
-    edited.scale_objects = portal.portal.scale_objects;
-    portal.portal = edited;
 }
 
 fn offset_u16(value: u16, delta: i16) -> u16 {

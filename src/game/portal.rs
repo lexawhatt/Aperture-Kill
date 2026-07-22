@@ -8,7 +8,7 @@ const CROSSING_EPSILON: f32 = 0.001;
 const EXIT_MARGIN: f32 = 1.0;
 const MIN_PORTAL_DIMENSION: f32 = 1.0;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
     pub r: u8,
     pub g: u8,

@@ -47,6 +47,50 @@ pub(super) enum EditorSelection {
     WorldPortal(usize),
 }
 
+impl EditorSelection {
+    pub(super) fn solid_index(self) -> Option<usize> {
+        match self {
+            Self::Solid(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn door_index(self) -> Option<usize> {
+        match self {
+            Self::Door(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn hazard_index(self) -> Option<usize> {
+        match self {
+            Self::Hazard(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn checkpoint_index(self) -> Option<usize> {
+        match self {
+            Self::Checkpoint(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn text_index(self) -> Option<usize> {
+        match self {
+            Self::Text(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn world_portal_index(self) -> Option<usize> {
+        match self {
+            Self::WorldPortal(index) => Some(index),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct EditorMoveStart {
     pub(super) selection: EditorSelection,
