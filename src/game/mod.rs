@@ -13,9 +13,9 @@ use crate::constants::{
     PIERCE_ALT_CHARGE_TIME, PIERCE_ALT_COOLDOWN, PIERCE_ALT_DAMAGE, PIERCE_BEAM_TIME,
     PIERCE_PRIMARY_COOLDOWN, PIERCE_PRIMARY_DAMAGE, PIERCE_RANGE, PLAYER_DAMAGE_PULSE_TIME,
     PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
-    PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_WIDTH,
+    PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
 };
-use crate::game::level::{CollisionGeometry, DoorEvent, Level, WorldPortal};
+use crate::game::level::{CollisionGeometry, DoorEvent, Level, Solid, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
 use crate::game::portal::{Color, Portal};
@@ -25,6 +25,10 @@ const MAX_STEP_DISTANCE: f32 = 8.0;
 const MAX_PHYSICS_STEPS: usize = 96;
 const FOOTSTEP_MIN_SPEED: f32 = 70.0;
 const WORLD_PORTAL_COOLDOWN_STEPS: u8 = 2;
+const MAX_PORTAL_RAY_CROSSES: usize = 8;
+const PORTAL_RAY_EXIT_OFFSET: f32 = PORTAL_SURFACE_OFFSET + 0.25;
+const ENEMY_NAV_EDGE_MARGIN: f32 = 4.0;
+const ENEMY_NAV_SURFACE_SNAP: f32 = 12.0;
 
 pub struct World {
     pub level: Level,
@@ -88,10 +92,69 @@ pub struct PiercerState {
 
 #[derive(Clone, Copy, Debug)]
 pub struct PiercerBeam {
-    pub start: glam::Vec2,
-    pub end: glam::Vec2,
+    pub segments: [PiercerBeamSegment; MAX_PORTAL_RAY_CROSSES + 1],
+    pub segment_count: usize,
     pub charged: bool,
     pub time: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PiercerBeamSegment {
+    pub start: glam::Vec2,
+    pub end: glam::Vec2,
+}
+
+#[derive(Clone, Copy)]
+struct PortalLink {
+    source: Portal,
+    destination: Portal,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RaySegment {
+    start: glam::Vec2,
+    end: glam::Vec2,
+    distance_start: f32,
+}
+
+#[derive(Clone)]
+struct PortalRay {
+    segments: Vec<RaySegment>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EnemyTarget {
+    pos: glam::Vec2,
+    can_attack: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EnemyTargetCandidate {
+    pos: glam::Vec2,
+    can_attack: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EnemyRouteTarget {
+    pos: glam::Vec2,
+    cost: f32,
+    can_attack: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NavSurface {
+    index: usize,
+    min_x: f32,
+    max_x: f32,
+    y: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NavState {
+    cost: f32,
+    x: f32,
+    first_x: f32,
+    visited: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -366,36 +429,55 @@ impl World {
         }
 
         let dir = aim.normalize();
-        let max_end = origin + dir * PIERCE_RANGE;
-        let wall_hit = self
-            .level
-            .raycast_any_solid(origin, max_end)
-            .map(|hit| hit.point);
-        let wall_distance = wall_hit
-            .map(|point| point.distance(origin))
-            .unwrap_or(PIERCE_RANGE);
+        let portal_links = self.portal_links();
+        let ray = self.portal_ray(origin, dir, PIERCE_RANGE, &portal_links);
         let damage = if charged {
             PIERCE_ALT_DAMAGE
         } else {
             PIERCE_PRIMARY_DAMAGE
         };
+        let mut hits = Vec::new();
 
-        for enemy in &mut self.level.enemies {
-            let Some(distance) =
-                ray_hits_enemy(origin, dir, wall_distance, enemy.pos, enemy.half_size())
-            else {
+        for (enemy_index, enemy) in self.level.enemies.iter().enumerate() {
+            for segment in &ray.segments {
+                let segment_delta = segment.end - segment.start;
+                let segment_length = segment_delta.length();
+                if segment_length <= 0.001 {
+                    continue;
+                }
+
+                let Some(distance) = ray_hits_enemy(
+                    segment.start,
+                    segment_delta / segment_length,
+                    segment_length,
+                    enemy.pos,
+                    enemy.half_size(),
+                ) else {
+                    continue;
+                };
+
+                hits.push((segment.distance_start + distance, enemy_index));
+                break;
+            }
+        }
+
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hits.dedup_by_key(|(_, enemy_index)| *enemy_index);
+
+        for (_, enemy_index) in hits {
+            let Some(enemy) = self.level.enemies.get_mut(enemy_index) else {
                 continue;
             };
-            if distance <= wall_distance && enemy.damage(damage) && !charged {
+
+            if enemy.damage(damage) && !charged {
                 break;
             }
         }
         self.level.enemies.retain(|enemy| enemy.health > 0.0);
 
-        let end = wall_hit.unwrap_or(max_end);
         self.piercer.beam = Some(PiercerBeam {
-            start: origin,
-            end,
+            segments: piercer_beam_segments(&ray.segments),
+            segment_count: ray.segments.len().min(MAX_PORTAL_RAY_CROSSES + 1),
             charged,
             time: PIERCE_BEAM_TIME,
         });
@@ -447,6 +529,96 @@ impl World {
                     && portal
                         .is_some_and(|portal| portal.pos.distance(center) < PORTAL_MIN_DISTANCE)
             })
+    }
+
+    fn portal_links(&self) -> Vec<PortalLink> {
+        let mut links = Vec::new();
+
+        if let [Some(source), Some(destination)] = self.portals {
+            links.push(PortalLink {
+                source,
+                destination,
+            });
+            links.push(PortalLink {
+                source: destination,
+                destination: source,
+            });
+        }
+
+        links.extend(self.level.world_portals.iter().enumerate().filter_map(
+            |(source_index, source)| {
+                let destination_index =
+                    WorldPortal::receiver_index(&self.level.world_portals, source_index)?;
+                let destination = self.level.world_portals.get(destination_index)?;
+
+                Some(PortalLink {
+                    source: source.portal,
+                    destination: destination.portal,
+                })
+            },
+        ));
+
+        links
+    }
+
+    fn portal_ray(
+        &self,
+        mut origin: glam::Vec2,
+        mut dir: glam::Vec2,
+        max_distance: f32,
+        portal_links: &[PortalLink],
+    ) -> PortalRay {
+        let mut remaining = max_distance.max(0.0);
+        let mut traveled = 0.0;
+        let mut segments = Vec::new();
+
+        for _ in 0..=MAX_PORTAL_RAY_CROSSES {
+            if remaining <= 0.001 || dir.length_squared() <= 0.001 {
+                break;
+            }
+
+            dir = dir.normalize();
+            let fallback_end = origin + dir * remaining;
+            let wall_hit = self.level.raycast_any_solid(origin, fallback_end);
+            let wall_distance = wall_hit
+                .map(|hit| hit.point.distance(origin))
+                .unwrap_or(remaining);
+            let segment_end = origin + dir * wall_distance.min(remaining);
+
+            if let Some((time, link)) = first_portal_crossing(origin, segment_end, portal_links) {
+                let crossing = origin.lerp(segment_end, time);
+                let distance = crossing.distance(origin);
+
+                segments.push(RaySegment {
+                    start: origin,
+                    end: crossing,
+                    distance_start: traveled,
+                });
+
+                traveled += distance;
+                remaining -= distance;
+                let mapped_crossing = link.source.map_view_point_to(&link.destination, crossing);
+                let mapped_dir = link.source.map_direction_to(&link.destination, dir);
+                let exit_dir = mapped_dir.normalize_or_zero();
+
+                if exit_dir.length_squared() <= 0.001 {
+                    break;
+                }
+
+                origin = mapped_crossing + link.destination.normal() * PORTAL_RAY_EXIT_OFFSET;
+                dir = exit_dir;
+                continue;
+            }
+
+            segments.push(RaySegment {
+                start: origin,
+                end: segment_end,
+                distance_start: traveled,
+            });
+            break;
+        }
+
+        PortalRay { segments }
     }
 
     fn try_teleport(&mut self, input: MovementInput) -> bool {
@@ -595,14 +767,32 @@ impl World {
     fn tick_enemies(&mut self, dt: f32) {
         let player_pos = self.player.pos;
         let mut damage = 0.0;
+        let portal_links = self.portal_links();
+        let collision_portals: Vec<_> = portal_links.iter().map(|link| link.source).collect();
+        let targets: Vec<_> = self
+            .level
+            .enemies
+            .iter()
+            .map(|enemy| self.enemy_target(enemy.pos, enemy.half_size(), player_pos, &portal_links))
+            .collect();
         let collision = CollisionGeometry::new(&self.level.solids, &self.level.doors);
 
-        for enemy in &mut self.level.enemies {
-            if let Some(amount) = enemy.update(dt, player_pos, collision) {
+        for (enemy, target) in self.level.enemies.iter_mut().zip(targets) {
+            if let Some(amount) = enemy.update(
+                dt,
+                target.pos,
+                target.can_attack,
+                collision,
+                &collision_portals,
+            ) {
                 damage += amount;
                 self.sound_events.push(SoundEvent::FilthBite(enemy.pos));
             }
+
+            teleport_enemy_through_portals(enemy, &portal_links);
         }
+
+        separate_enemies(&mut self.level.enemies, collision, &collision_portals);
 
         if damage > 0.0 {
             let health_before = self.player.health;
@@ -619,6 +809,71 @@ impl World {
                 self.start_death_sequence();
             }
         }
+    }
+
+    fn enemy_target(
+        &self,
+        enemy_pos: glam::Vec2,
+        enemy_half_size: glam::Vec2,
+        player_pos: glam::Vec2,
+        portal_links: &[PortalLink],
+    ) -> EnemyTarget {
+        let direct_clear = line_clear_to_target(&self.level, enemy_pos, player_pos);
+        let mut candidates = vec![EnemyTargetCandidate {
+            pos: player_pos,
+            can_attack: direct_clear,
+        }];
+
+        for link in portal_links {
+            if !line_clear_from_portal(&self.level, link.destination, player_pos) {
+                continue;
+            }
+
+            let apparent_player = link.destination.map_view_point_to(&link.source, player_pos);
+            let can_attack = line_clear_to_portal(&self.level, enemy_pos, link.source);
+
+            candidates.push(EnemyTargetCandidate {
+                pos: apparent_player,
+                can_attack,
+            });
+        }
+
+        let fallback = candidates
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                let a_cost = if a.can_attack {
+                    enemy_pos.distance(a.pos)
+                } else {
+                    f32::INFINITY
+                };
+                let b_cost = if b.can_attack {
+                    enemy_pos.distance(b.pos)
+                } else {
+                    f32::INFINITY
+                };
+
+                a_cost.total_cmp(&b_cost)
+            })
+            .unwrap_or(EnemyTargetCandidate {
+                pos: player_pos,
+                can_attack: direct_clear,
+            });
+
+        candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                enemy_route_target(&self.level, enemy_pos, enemy_half_size, candidate)
+            })
+            .min_by(|a, b| a.cost.total_cmp(&b.cost))
+            .map(|target| EnemyTarget {
+                pos: target.pos,
+                can_attack: target.can_attack,
+            })
+            .unwrap_or(EnemyTarget {
+                pos: fallback.pos,
+                can_attack: fallback.can_attack,
+            })
     }
 
     fn update_death(&mut self, dt: f32, input: &Input) -> bool {
@@ -693,6 +948,352 @@ impl World {
         self.sound_events
             .push(SoundEvent::HeavyLand(self.respawn_pos));
     }
+}
+
+fn first_portal_crossing(
+    origin: glam::Vec2,
+    end: glam::Vec2,
+    portal_links: &[PortalLink],
+) -> Option<(f32, PortalLink)> {
+    portal_links
+        .iter()
+        .filter_map(|link| {
+            let time = link.source.crossing_time(origin, end, glam::Vec2::ZERO)?;
+
+            (time > 0.001 && time < 0.999).then_some((time, *link))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+fn line_clear_to_target(level: &Level, origin: glam::Vec2, target: glam::Vec2) -> bool {
+    let distance = origin.distance(target);
+
+    distance <= 1.0
+        || level
+            .raycast_any_solid(origin, target)
+            .is_none_or(|hit| hit.point.distance(origin) + 1.0 >= distance)
+}
+
+fn line_clear_to_portal(level: &Level, origin: glam::Vec2, portal: Portal) -> bool {
+    let target = portal.pos;
+    let distance = origin.distance(target);
+
+    distance <= 1.0
+        || level
+            .raycast_any_solid(origin, target)
+            .is_none_or(|hit| hit.point.distance(origin) + PORTAL_RAY_EXIT_OFFSET >= distance)
+}
+
+fn line_clear_from_portal(level: &Level, portal: Portal, target: glam::Vec2) -> bool {
+    let origin = portal.pos + portal.normal() * PORTAL_RAY_EXIT_OFFSET;
+
+    line_clear_to_target(level, origin, target)
+}
+
+fn enemy_route_target(
+    level: &Level,
+    enemy_pos: glam::Vec2,
+    enemy_half_size: glam::Vec2,
+    candidate: EnemyTargetCandidate,
+) -> Option<EnemyRouteTarget> {
+    let surfaces = nav_surfaces(level);
+    let start_surface = nav_surface_at(&surfaces, enemy_pos, enemy_half_size)?;
+    let target_surface = nav_surface_at(&surfaces, candidate.pos, enemy_half_size);
+
+    if target_surface == Some(start_surface) {
+        return Some(EnemyRouteTarget {
+            pos: candidate.pos,
+            cost: enemy_pos.distance(candidate.pos),
+            can_attack: candidate.can_attack,
+        });
+    }
+
+    let target_surface = target_surface?;
+    let route = surface_route_next_x(
+        &surfaces,
+        start_surface,
+        enemy_pos.x,
+        target_surface,
+        candidate.pos.x,
+        enemy_half_size.x,
+    )?;
+
+    Some(EnemyRouteTarget {
+        pos: glam::Vec2::new(route.0, enemy_pos.y),
+        cost: route.1,
+        can_attack: false,
+    })
+}
+
+fn nav_surfaces(level: &Level) -> Vec<NavSurface> {
+    level
+        .solids
+        .iter()
+        .copied()
+        .chain(
+            level
+                .doors
+                .iter()
+                .filter(|door| door.blocks_player())
+                .map(|door| door.moving_solid()),
+        )
+        .enumerate()
+        .filter_map(|(index, solid)| nav_surface(index, solid))
+        .collect()
+}
+
+fn nav_surface(index: usize, solid: Solid) -> Option<NavSurface> {
+    if solid.rotation().abs() > 0.001 {
+        return None;
+    }
+
+    let pos = solid.pos();
+    let size = solid.size();
+
+    (size.x >= 8.0 && size.y >= 4.0).then_some(NavSurface {
+        index,
+        min_x: pos.x,
+        max_x: pos.x + size.x,
+        y: pos.y,
+    })
+}
+
+fn nav_surface_at(
+    surfaces: &[NavSurface],
+    pos: glam::Vec2,
+    half_size: glam::Vec2,
+) -> Option<usize> {
+    let foot_y = pos.y + half_size.y;
+
+    surfaces
+        .iter()
+        .filter(|surface| {
+            pos.x >= surface.min_x - half_size.x
+                && pos.x <= surface.max_x + half_size.x
+                && foot_y <= surface.y + ENEMY_NAV_SURFACE_SNAP
+                && surface.y >= foot_y - ENEMY_NAV_SURFACE_SNAP
+        })
+        .min_by(|a, b| (a.y - foot_y).abs().total_cmp(&(b.y - foot_y).abs()))
+        .map(|surface| surface.index)
+}
+
+fn surface_route_next_x(
+    surfaces: &[NavSurface],
+    start_surface: usize,
+    start_x: f32,
+    target_surface: usize,
+    target_x: f32,
+    half_width: f32,
+) -> Option<(f32, f32)> {
+    let mut states = vec![
+        NavState {
+            cost: f32::INFINITY,
+            x: 0.0,
+            first_x: 0.0,
+            visited: false,
+        };
+        surfaces.len()
+    ];
+
+    let start_pos = surface_position(surfaces, start_surface)?;
+    states[start_pos] = NavState {
+        cost: 0.0,
+        x: start_x,
+        first_x: start_x,
+        visited: false,
+    };
+
+    while let Some(current_pos) = states
+        .iter()
+        .enumerate()
+        .filter(|(_, state)| !state.visited && state.cost.is_finite())
+        .min_by(|(_, a), (_, b)| a.cost.total_cmp(&b.cost))
+        .map(|(index, _)| index)
+    {
+        if surfaces[current_pos].index == target_surface {
+            let state = states[current_pos];
+            let cost = state.cost + (target_x - state.x).abs();
+
+            return Some((state.first_x, cost));
+        }
+
+        states[current_pos].visited = true;
+        let current = surfaces[current_pos];
+        let current_state = states[current_pos];
+
+        for direction in [-1.0, 1.0] {
+            let edge_x = if direction < 0.0 {
+                current.min_x - half_width - ENEMY_NAV_EDGE_MARGIN
+            } else {
+                current.max_x + half_width + ENEMY_NAV_EDGE_MARGIN
+            };
+            let Some(next_pos) = drop_surface_below(surfaces, current_pos, edge_x) else {
+                continue;
+            };
+
+            let walk_cost = (edge_x - current_state.x).abs();
+            let drop_cost = (surfaces[next_pos].y - current.y).max(0.0) * 0.15;
+            let cost = current_state.cost + walk_cost + drop_cost;
+
+            if cost >= states[next_pos].cost {
+                continue;
+            }
+
+            states[next_pos] = NavState {
+                cost,
+                x: edge_x,
+                first_x: if current.index == start_surface {
+                    edge_x
+                } else {
+                    current_state.first_x
+                },
+                visited: false,
+            };
+        }
+    }
+
+    None
+}
+
+fn surface_position(surfaces: &[NavSurface], surface_index: usize) -> Option<usize> {
+    surfaces
+        .iter()
+        .position(|surface| surface.index == surface_index)
+}
+
+fn drop_surface_below(surfaces: &[NavSurface], source_pos: usize, drop_x: f32) -> Option<usize> {
+    let source = surfaces[source_pos];
+
+    surfaces
+        .iter()
+        .enumerate()
+        .filter(|(index, surface)| {
+            *index != source_pos
+                && surface.y > source.y + 1.0
+                && drop_x >= surface.min_x
+                && drop_x <= surface.max_x
+        })
+        .min_by(|(_, a), (_, b)| a.y.total_cmp(&b.y))
+        .map(|(index, _)| index)
+}
+
+fn teleport_enemy_through_portals(enemy: &mut enemy::Enemy, portal_links: &[PortalLink]) {
+    let half_size = enemy.half_size();
+    let mut best = None;
+
+    for link in portal_links {
+        let Some(time) = link
+            .source
+            .crossing_time(enemy.prev_pos, enemy.pos, half_size)
+        else {
+            continue;
+        };
+
+        if best.is_none_or(|(best_time, _)| time < best_time) {
+            best = Some((time, *link));
+        }
+    }
+
+    let Some((_, link)) = best else {
+        return;
+    };
+    let size = enemy.size();
+
+    link.source.teleport_actor_to(
+        &link.destination,
+        &mut enemy.prev_pos,
+        &mut enemy.pos,
+        size,
+        &mut enemy.vel,
+    );
+}
+
+fn separate_enemies(
+    enemies: &mut [enemy::Enemy],
+    collision: CollisionGeometry<'_>,
+    portals: &[Portal],
+) {
+    for _ in 0..3 {
+        let mut moved = false;
+
+        for left_index in 0..enemies.len() {
+            let (left, right) = enemies.split_at_mut(left_index + 1);
+            let a = &mut left[left_index];
+
+            for b in right {
+                let Some(push) = enemy_overlap_push(a, b) else {
+                    continue;
+                };
+
+                let normal = push.normalize_or_zero();
+
+                a.pos -= push * 0.5;
+                b.pos += push * 0.5;
+
+                let a_into_b = a.vel.dot(normal);
+                if a_into_b > 0.0 {
+                    a.vel -= normal * a_into_b;
+                }
+
+                let b_into_a = b.vel.dot(-normal);
+                if b_into_a > 0.0 {
+                    b.vel += normal * b_into_a;
+                }
+
+                moved = true;
+            }
+        }
+
+        if !moved {
+            break;
+        }
+
+        for enemy in enemies.iter_mut() {
+            let half_size = enemy.half_size();
+
+            enemy.on_ground = collision.resolve_actor_body_with_portals(
+                &mut enemy.pos,
+                half_size,
+                &mut enemy.vel,
+                portals,
+            );
+        }
+    }
+}
+
+fn enemy_overlap_push(a: &enemy::Enemy, b: &enemy::Enemy) -> Option<glam::Vec2> {
+    let delta = b.pos - a.pos;
+    let overlap_x = a.half_size().x + b.half_size().x - delta.x.abs();
+    let overlap_y = a.half_size().y + b.half_size().y - delta.y.abs();
+
+    if overlap_x <= 0.0 || overlap_y <= 0.0 {
+        return None;
+    }
+
+    if overlap_x <= overlap_y || delta.y.abs() < 1.0 {
+        let dir = if delta.x >= 0.0 { 1.0 } else { -1.0 };
+
+        Some(glam::Vec2::new(overlap_x * dir, 0.0))
+    } else {
+        let dir = if delta.y >= 0.0 { 1.0 } else { -1.0 };
+
+        Some(glam::Vec2::new(0.0, overlap_y * dir))
+    }
+}
+
+fn piercer_beam_segments(
+    segments: &[RaySegment],
+) -> [PiercerBeamSegment; MAX_PORTAL_RAY_CROSSES + 1] {
+    let mut beam_segments = [PiercerBeamSegment::default(); MAX_PORTAL_RAY_CROSSES + 1];
+
+    for (beam_segment, segment) in beam_segments.iter_mut().zip(segments) {
+        *beam_segment = PiercerBeamSegment {
+            start: segment.start,
+            end: segment.end,
+        };
+    }
+
+    beam_segments
 }
 
 fn ray_hits_enemy(

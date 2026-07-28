@@ -249,12 +249,15 @@ impl Canvas<'_> {
         } else {
             Color::rgb(255, 130, 40)
         };
-        let normal = (beam.end - beam.start).normalize_or_zero();
-        let side = Vec2::new(-normal.y, normal.x);
 
-        self.draw_world_line(beam.start + side * 2.0, beam.end + side * 2.0, bloom);
-        self.draw_world_line(beam.start - side * 2.0, beam.end - side * 2.0, bloom);
-        self.draw_world_line(beam.start, beam.end, color);
+        for segment in beam.segments.iter().take(beam.segment_count) {
+            let normal = (segment.end - segment.start).normalize_or_zero();
+            let side = Vec2::new(-normal.y, normal.x);
+
+            self.draw_world_line(segment.start + side * 2.0, segment.end + side * 2.0, bloom);
+            self.draw_world_line(segment.start - side * 2.0, segment.end - side * 2.0, bloom);
+            self.draw_world_line(segment.start, segment.end, color);
+        }
     }
 
     pub(super) fn player_rect(&mut self, rect: Rect, fill: Color, outline: Color) {

@@ -121,30 +121,72 @@ impl Portal {
     }
 
     pub fn teleport_player_to(&self, destination: &Portal, player: &mut Player) {
+        self.teleport_body_to(
+            destination,
+            &mut player.prev_pos,
+            &mut player.pos,
+            &mut player.size,
+            &mut player.vel,
+            true,
+        );
+    }
+
+    pub fn teleport_actor_to(
+        &self,
+        destination: &Portal,
+        previous: &mut Vec2,
+        current: &mut Vec2,
+        size: Vec2,
+        velocity: &mut Vec2,
+    ) {
+        let mut size = size;
+
+        self.teleport_body_to(destination, previous, current, &mut size, velocity, false);
+    }
+
+    pub fn map_direction_to(&self, destination: &Portal, direction: Vec2) -> Vec2 {
+        let scale = self.object_scale_to(destination);
+        let destination_tangent = destination.oriented_tangent(self);
+
+        transform_velocity(direction, self, destination, destination_tangent, scale)
+    }
+
+    fn teleport_body_to(
+        &self,
+        destination: &Portal,
+        previous: &mut Vec2,
+        current: &mut Vec2,
+        size: &mut Vec2,
+        velocity: &mut Vec2,
+        scale_size: bool,
+    ) {
         let scale = self.object_scale_to(destination);
         let destination_pos = destination.pos;
         let destination_normal = destination.normal;
         let destination_tangent = destination.oriented_tangent(self);
-        let mut previous =
-            self.map_point_to(destination, player.prev_pos, scale, destination_tangent);
-        let mut current = self.map_point_to(destination, player.pos, scale, destination_tangent);
-        let mapped_size = player.size * scale;
+        let mut mapped_previous =
+            self.map_point_to(destination, *previous, scale, destination_tangent);
+        let mut mapped_current =
+            self.map_point_to(destination, *current, scale, destination_tangent);
+        let mapped_size = if scale_size { *size * scale } else { *size };
         let min_exit_distance =
             projected_extent(mapped_size / 2.0, destination_normal) + EXIT_MARGIN;
-        let current_distance = (current - destination_pos).dot(destination_normal);
+        let current_distance = (mapped_current - destination_pos).dot(destination_normal);
 
         // Keep the full hitbox in front of the exit so collision does not push it behind the wall.
         if current_distance < min_exit_distance {
             let push = destination_normal * (min_exit_distance - current_distance);
 
-            previous += push;
-            current += push;
+            mapped_previous += push;
+            mapped_current += push;
         }
 
-        player.size *= scale;
-        player.prev_pos = previous;
-        player.pos = current;
-        player.vel = transform_velocity(player.vel, self, destination, destination_tangent, scale);
+        if scale_size {
+            *size = mapped_size;
+        }
+        *previous = mapped_previous;
+        *current = mapped_current;
+        *velocity = transform_velocity(*velocity, self, destination, destination_tangent, scale);
     }
 
     pub fn map_body_to(&self, destination: &Portal, center: Vec2, size: Vec2) -> (Vec2, Vec2) {

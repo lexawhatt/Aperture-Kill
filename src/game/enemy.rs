@@ -15,6 +15,7 @@ pub enum EnemyKind {
 pub struct Enemy {
     pub kind: EnemyKind,
     pub pos: Vec2,
+    pub prev_pos: Vec2,
     pub vel: Vec2,
     pub health: f32,
     pub attack_cooldown: f32,
@@ -27,6 +28,7 @@ impl Enemy {
         Self {
             kind: EnemyKind::Filth,
             pos: Vec2::new(x, y),
+            prev_pos: Vec2::new(x, y),
             vel: Vec2::ZERO,
             health: FILTH_HEALTH,
             attack_cooldown: 0.0,
@@ -60,14 +62,16 @@ impl Enemy {
     pub fn update(
         &mut self,
         dt: f32,
-        player_pos: Vec2,
+        target_pos: Vec2,
+        can_attack: bool,
         collision: CollisionGeometry<'_>,
+        portals: &[crate::game::portal::Portal],
     ) -> Option<f32> {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt).max(0.0);
 
         match self.kind {
-            EnemyKind::Filth => self.update_filth(dt, player_pos, collision),
+            EnemyKind::Filth => self.update_filth(dt, target_pos, can_attack, collision, portals),
         }
     }
 
@@ -85,19 +89,32 @@ impl Enemy {
     fn update_filth(
         &mut self,
         dt: f32,
-        player_pos: Vec2,
+        target_pos: Vec2,
+        can_attack: bool,
         collision: CollisionGeometry<'_>,
+        portals: &[crate::game::portal::Portal],
     ) -> Option<f32> {
-        let to_player = player_pos - self.pos;
-        let dir_x = to_player.x.signum();
+        self.prev_pos = self.pos;
+
+        let to_target = target_pos - self.pos;
+        let dir_x = if to_target.x.abs() > 2.0 {
+            to_target.x.signum()
+        } else {
+            0.0
+        };
 
         self.vel.x = dir_x * FILTH_SPEED;
         self.vel.y += crate::constants::GRAVITY * dt;
         self.pos += self.vel * dt;
         let half_size = self.half_size();
-        self.on_ground = collision.resolve_actor_body(&mut self.pos, half_size, &mut self.vel);
+        self.on_ground = collision.resolve_actor_body_with_portals(
+            &mut self.pos,
+            half_size,
+            &mut self.vel,
+            portals,
+        );
 
-        if to_player.length() <= FILTH_ATTACK_RANGE && self.attack_cooldown <= 0.0 {
+        if can_attack && to_target.length() <= FILTH_ATTACK_RANGE && self.attack_cooldown <= 0.0 {
             self.attack_cooldown = FILTH_ATTACK_COOLDOWN;
             return Some(FILTH_ATTACK_DAMAGE);
         }

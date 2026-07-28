@@ -54,11 +54,21 @@ impl Level {
 }
 
 impl CollisionGeometry<'_> {
-    pub fn resolve_actor_body(&self, center: &mut Vec2, half_size: Vec2, vel: &mut Vec2) -> bool {
+    pub fn resolve_actor_body_with_portals(
+        &self,
+        center: &mut Vec2,
+        half_size: Vec2,
+        vel: &mut Vec2,
+        portals: &[Portal],
+    ) -> bool {
         let mut on_ground = false;
 
         for solid in self.solids.iter().copied() {
             if let Some(correction) = body_solid_overlap(*center, half_size, solid) {
+                if portal_opens_collision(*center, half_size, correction, solid, portals) {
+                    continue;
+                }
+
                 on_ground |= resolve_actor_push(center, vel, correction);
             }
         }

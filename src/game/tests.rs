@@ -5,9 +5,9 @@ use super::level::{Checkpoint, Door, Hazard, Level, Solid, WorldPortal};
 use super::player::{Player, PlayerEvent};
 use super::portal::{Color, Portal};
 use crate::constants::{
-    AIR_SLIDE_WALL_KICK_Y, DASH_SPEED, DIVE_BOOST, GRAVITY, JUMP_VELOCITY, MAX_DASH_CHARGES,
-    PLAYER_SIZE, PLAYER_SPEED, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH, SLAM_NORMAL_HEIGHT_GAIN,
-    SLIDE_BOOST, WALL_JUMP_Y, WALL_SLIDE_SPEED,
+    AIR_SLIDE_WALL_KICK_Y, DASH_SPEED, DIVE_BOOST, FILTH_SIZE, GRAVITY, JUMP_VELOCITY,
+    MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
+    SLAM_NORMAL_HEIGHT_GAIN, SLIDE_BOOST, WALL_JUMP_Y, WALL_SLIDE_SPEED,
 };
 use crate::platform::input::{GameKey, Input};
 
@@ -995,6 +995,117 @@ fn portal_does_not_place_too_close_to_other_portal() {
 
     assert!(world.portals[0].is_some());
     assert!(world.portals[1].is_none());
+}
+
+#[test]
+fn piercer_shot_travels_through_portals() {
+    let mut world = World::new();
+    let mut input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(100.0, 40.0, 24.0, 140.0, true)],
+        enemies: vec![super::enemy::Enemy::filth(260.0, 107.0)],
+        ..Level::empty()
+    };
+    world.player = Player::new(50.0, 120.0);
+    world.portals = [
+        Some(Portal::new(
+            100.0 - PORTAL_SURFACE_OFFSET,
+            107.0,
+            Vec2::new(-1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::BLUE,
+        )),
+        Some(Portal::new(
+            220.0,
+            107.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::ORANGE,
+        )),
+    ];
+
+    input.set_aim_pos(Vec2::new(360.0, 107.0));
+    input.set_primary_fire(true);
+    input.update();
+    world.update(0.0, &input, 900.0, 600.0);
+
+    assert!(world.level.enemies.is_empty());
+    assert_eq!(world.piercer.beam.unwrap().segment_count, 2);
+}
+
+#[test]
+fn enemy_chases_player_through_portal_route() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(120.0, 0.0, 24.0, 220.0, true)],
+        enemies: vec![super::enemy::Enemy::filth(200.0, 100.0)],
+        ..Level::empty()
+    };
+    world.player = Player::new(40.0, 100.0);
+    world.portals = [
+        Some(Portal::new(
+            300.0,
+            100.0,
+            Vec2::new(-1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::BLUE,
+        )),
+        Some(Portal::new(
+            20.0,
+            100.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::ORANGE,
+        )),
+    ];
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.level.enemies[0].pos.x > 200.0);
+}
+
+#[test]
+fn enemy_routes_to_drop_edge_when_player_is_on_lower_platform() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![
+            Solid::new(100.0, 100.0, 200.0, 24.0, false),
+            Solid::new(200.0, 200.0, 600.0, 24.0, false),
+        ],
+        enemies: vec![super::enemy::Enemy::filth(260.0, 71.0)],
+        ..Level::empty()
+    };
+    world.player = Player::new(220.0, 164.0);
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.level.enemies[0].pos.x > 260.0);
+}
+
+#[test]
+fn enemies_are_separated_after_tick() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        enemies: vec![
+            super::enemy::Enemy::filth(200.0, 100.0),
+            super::enemy::Enemy::filth(200.0, 100.0),
+        ],
+        ..Level::empty()
+    };
+
+    world.update(0.0, &input, 900.0, 600.0);
+
+    let distance = world.level.enemies[0]
+        .pos
+        .distance(world.level.enemies[1].pos);
+    assert!(distance >= FILTH_SIZE.0 - 0.1);
 }
 
 #[test]
