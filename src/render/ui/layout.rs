@@ -17,13 +17,17 @@ pub(super) fn grid_mode_text(grid_snap: bool) -> &'static str {
 
 pub(super) fn editor_tool_label(index: usize) -> &'static str {
     match index {
-        1 => "SOLID",
-        2 => "PORTAL",
-        3 => "DOOR",
-        4 => "TEXT",
-        5 => "ACID",
-        6 => "CHECK",
-        7 => "W PORT",
+        1 => "P SURF",
+        2 => "SURFACE",
+        3 => "ACID",
+        4 => "DOOR",
+        5 => "CHECK",
+        6 => "W PORT",
+        7 => "TEXT",
+        8 => "FILTH",
+        9 => "START",
+        10 => "END",
+        11 => "SPAWN",
         _ => "",
     }
 }

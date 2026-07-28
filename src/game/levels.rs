@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use glam::Vec2;
 
 use crate::game::enemy::{Enemy, EnemyKind};
-use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
+use crate::game::level::{
+    Checkpoint, Door, Hazard, Level, LevelText, LevelTrigger, LevelTriggerKind, Solid, WorldPortal,
+};
 use crate::game::portal::{Color, Portal};
 
 const LEVEL_DIR: &str = "levels";
@@ -20,6 +22,7 @@ pub struct LevelSpec {
     pub hazards: Vec<Hazard>,
     pub checkpoints: Vec<Checkpoint>,
     pub enemies: Vec<Enemy>,
+    pub triggers: Vec<LevelTrigger>,
     pub texts: Vec<LevelText>,
     pub world_portals: Vec<WorldPortal>,
     pub path: Option<PathBuf>,
@@ -35,6 +38,7 @@ impl LevelSpec {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             enemies: Vec::new(),
+            triggers: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
             path: None,
@@ -47,6 +51,10 @@ impl LevelSpec {
         self.hazards = world.hazards.clone();
         self.checkpoints = world.checkpoints.clone();
         self.enemies = world.enemies.clone();
+        self.triggers = world.triggers.clone();
+        if let Some(spawn) = world.level_start_pos() {
+            self.spawn = spawn;
+        }
         self.texts = world.texts.clone();
         self.world_portals = world.world_portals.clone();
     }
@@ -58,6 +66,7 @@ impl LevelSpec {
             hazards: self.hazards.clone(),
             checkpoints: self.checkpoints.clone(),
             enemies: self.enemies.clone(),
+            triggers: self.triggers.clone(),
             texts: self.texts.clone(),
             world_portals: self.world_portals.clone(),
         }
@@ -152,7 +161,31 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             EnemyKind::Filth => "filth",
         };
 
-        body.push_str(&format!("enemy {} {} {}\n", kind, enemy.pos.x, enemy.pos.y));
+        if enemy.spawn_wave > 0 {
+            body.push_str(&format!(
+                "enemy {} {} {} {} {}\n",
+                kind, enemy.pos.x, enemy.pos.y, enemy.spawn_id, enemy.spawn_wave
+            ));
+        } else {
+            body.push_str(&format!("enemy {} {} {}\n", kind, enemy.pos.x, enemy.pos.y));
+        }
+    }
+    for trigger in &level.triggers {
+        match trigger.kind {
+            LevelTriggerKind::LevelStart => {
+                body.push_str(&format_trigger("level_start", trigger.solid, None));
+            }
+            LevelTriggerKind::LevelEnd => {
+                body.push_str(&format_trigger("level_end", trigger.solid, None));
+            }
+            LevelTriggerKind::EnemySpawn { enemy_id } => {
+                body.push_str(&format_trigger(
+                    "enemy_spawn",
+                    trigger.solid,
+                    Some(enemy_id),
+                ));
+            }
+        }
     }
     for text in &level.texts {
         body.push_str(&format!(
@@ -203,6 +236,7 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
     let mut hazards = Vec::new();
     let mut checkpoints = Vec::new();
     let mut enemies = Vec::new();
+    let mut triggers = Vec::new();
     let mut texts = Vec::new();
     let mut world_portals = Vec::new();
 
@@ -280,9 +314,27 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
                 };
 
                 if kind.eq_ignore_ascii_case("filth") {
-                    enemies.push(Enemy::filth(pos.x, pos.y));
+                    let spawn_id = parse_next_u16(&mut parts);
+                    let spawn_wave = parse_next_u16(&mut parts);
+
+                    enemies.push(match (spawn_id, spawn_wave) {
+                        (Some(spawn_id), Some(spawn_wave)) if spawn_wave > 0 => {
+                            Enemy::filth_spawn(pos.x, pos.y, spawn_id, spawn_wave)
+                        }
+                        _ => Enemy::filth(pos.x, pos.y),
+                    });
                 }
             }
+            Some("trigger") => {
+                let Some(kind) = parts.next() else {
+                    continue;
+                };
+
+                parse_trigger(kind, &mut parts, &mut triggers);
+            }
+            Some("level_start") => parse_trigger("level_start", &mut parts, &mut triggers),
+            Some("level_end") => parse_trigger("level_end", &mut parts, &mut triggers),
+            Some("enemy_spawn") => parse_trigger("enemy_spawn", &mut parts, &mut triggers),
             Some("text") => {
                 let Some(pos) = parse_vec2(&mut parts) else {
                     continue;
@@ -352,10 +404,56 @@ fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
         hazards,
         checkpoints,
         enemies,
+        triggers,
         texts,
         world_portals,
         path: Some(path.to_path_buf()),
     })
+}
+
+fn format_trigger(kind: &str, solid: Solid, value: Option<u16>) -> String {
+    match value {
+        Some(value) => format!(
+            "trigger {} {} {} {} {} {}\n",
+            kind,
+            solid.pos().x,
+            solid.pos().y,
+            solid.size().x,
+            solid.size().y,
+            value
+        ),
+        None => format!(
+            "trigger {} {} {} {} {}\n",
+            kind,
+            solid.pos().x,
+            solid.pos().y,
+            solid.size().x,
+            solid.size().y
+        ),
+    }
+}
+
+fn parse_trigger<'a>(
+    kind: &str,
+    parts: &mut impl Iterator<Item = &'a str>,
+    triggers: &mut Vec<LevelTrigger>,
+) {
+    let Some((pos, size)) = parse_rect(parts) else {
+        return;
+    };
+
+    match kind {
+        "level_start" => triggers.push(LevelTrigger::level_start(pos.x, pos.y, size.x, size.y)),
+        "level_end" => triggers.push(LevelTrigger::level_end(pos.x, pos.y, size.x, size.y)),
+        "enemy_spawn" => {
+            let enemy_id = parse_next_u16(parts).unwrap_or(1);
+
+            triggers.push(LevelTrigger::enemy_spawn(
+                pos.x, pos.y, size.x, size.y, enemy_id,
+            ));
+        }
+        _ => {}
+    }
 }
 
 fn parse_next<'a>(parts: &mut impl Iterator<Item = &'a str>) -> Option<f32> {

@@ -1,9 +1,10 @@
 use glam::Vec2;
 
-use crate::constants::PORTAL_SURFACE_OFFSET;
+use super::PortalLink;
+use crate::constants::{FILTH_SIGHT_RANGE, PORTAL_SURFACE_OFFSET};
 use crate::game::enemy::Enemy;
 use crate::game::geometry::projected_extent;
-use crate::game::level::{CollisionGeometry, Level, Solid, WorldPortal};
+use crate::game::level::{CollisionGeometry, Level, Solid};
 use crate::game::portal::Portal;
 
 const PORTAL_EXIT_OFFSET: f32 = PORTAL_SURFACE_OFFSET + 0.25;
@@ -12,14 +13,8 @@ const NAV_SURFACE_SNAP: f32 = 12.0;
 const NAV_DROP_COST_SCALE: f32 = 0.15;
 const PORTAL_ROUTE_COST: f32 = 24.0;
 
-#[derive(Clone, Copy)]
-pub(super) struct PortalLink {
-    pub source: Portal,
-    pub destination: Portal,
-}
-
 #[derive(Clone, Copy, Debug)]
-pub(super) struct EnemyTarget {
+pub(in crate::game) struct EnemyTarget {
     pub pos: Vec2,
     pub can_attack: bool,
 }
@@ -54,46 +49,7 @@ struct PortalNavEdge {
     cost: f32,
 }
 
-pub(super) fn portal_links(
-    player_portals: [Option<Portal>; 2],
-    world_portals: &[WorldPortal],
-) -> Vec<PortalLink> {
-    let mut links = Vec::new();
-
-    if let [Some(source), Some(destination)] = player_portals {
-        links.push(PortalLink {
-            source,
-            destination,
-        });
-        links.push(PortalLink {
-            source: destination,
-            destination: source,
-        });
-    }
-
-    links.extend(
-        world_portals
-            .iter()
-            .enumerate()
-            .filter_map(|(source_index, source)| {
-                let destination_index = WorldPortal::receiver_index(world_portals, source_index)?;
-                let destination = world_portals.get(destination_index)?;
-
-                Some(PortalLink {
-                    source: source.portal,
-                    destination: destination.portal,
-                })
-            }),
-    );
-
-    links
-}
-
-pub(super) fn collision_portals(links: &[PortalLink]) -> Vec<Portal> {
-    links.iter().map(|link| link.source).collect()
-}
-
-pub(super) fn enemy_targets(
+pub(in crate::game) fn enemy_targets(
     level: &Level,
     enemies: &[Enemy],
     player_pos: Vec2,
@@ -116,7 +72,10 @@ pub(super) fn enemy_targets(
         .collect()
 }
 
-pub(super) fn teleport_enemy_through_portals(enemy: &mut Enemy, portal_links: &[PortalLink]) {
+pub(in crate::game) fn teleport_enemy_through_portals(
+    enemy: &mut Enemy,
+    portal_links: &[PortalLink],
+) {
     let half_size = enemy.half_size();
     let mut best = None;
 
@@ -147,7 +106,7 @@ pub(super) fn teleport_enemy_through_portals(enemy: &mut Enemy, portal_links: &[
     );
 }
 
-pub(super) fn separate_enemies(
+pub(in crate::game) fn separate_enemies(
     enemies: &mut [Enemy],
     collision: CollisionGeometry<'_>,
     portals: &[Portal],
@@ -158,8 +117,15 @@ pub(super) fn separate_enemies(
         for left_index in 0..enemies.len() {
             let (left, right) = enemies.split_at_mut(left_index + 1);
             let a = &mut left[left_index];
+            if !a.is_active() {
+                continue;
+            }
 
             for b in right {
+                if !b.is_active() {
+                    continue;
+                }
+
                 let Some(push) = enemy_overlap_push(a, b) else {
                     continue;
                 };
@@ -187,7 +153,7 @@ pub(super) fn separate_enemies(
             break;
         }
 
-        for enemy in enemies.iter_mut() {
+        for enemy in enemies.iter_mut().filter(|enemy| enemy.is_active()) {
             let half_size = enemy.half_size();
 
             enemy.on_ground = collision.resolve_actor_body_with_portals(
@@ -209,6 +175,17 @@ fn enemy_target(
     portal_links: &[PortalLink],
 ) -> EnemyTarget {
     let direct_clear = line_clear(level, enemy_pos, player_pos);
+    let direct_visible = direct_clear && enemy_pos.distance(player_pos) <= FILTH_SIGHT_RANGE;
+    let platform_visible = horizontal_line_clear(level, enemy_pos, player_pos)
+        && enemy_pos.distance(player_pos) <= FILTH_SIGHT_RANGE;
+    let portal_target = portal_visible_enemy_target(level, enemy_pos, player_pos, portal_links);
+
+    if !direct_visible && !platform_visible && portal_target.is_none() {
+        return EnemyTarget {
+            pos: enemy_pos,
+            can_attack: false,
+        };
+    }
 
     enemy_route_target(
         surfaces,
@@ -223,7 +200,10 @@ fn enemy_target(
         can_attack: target.can_attack,
     })
     .unwrap_or_else(|| {
-        fallback_enemy_target(level, enemy_pos, player_pos, portal_links, direct_clear)
+        portal_target.unwrap_or(EnemyTarget {
+            pos: player_pos,
+            can_attack: direct_visible,
+        })
     })
 }
 
@@ -238,11 +218,13 @@ fn enemy_route_target(
     let start_surface = nav_surface_at(surfaces, enemy_pos, enemy_half_size)?;
     let target_surface = nav_surface_at(surfaces, player_pos, enemy_half_size)?;
 
-    if target_surface == start_surface {
+    if target_surface == start_surface && direct_clear {
         return Some(EnemyRouteTarget {
             pos: player_pos,
             can_attack: direct_clear,
         });
+    } else if target_surface == start_surface {
+        return None;
     }
 
     let portal_edges = portal_nav_edges(surfaces, portal_links, enemy_half_size);
@@ -541,6 +523,12 @@ fn line_clear(level: &Level, origin: Vec2, target: Vec2) -> bool {
             .is_none_or(|hit| hit.point.distance(origin) + 1.0 >= distance)
 }
 
+fn horizontal_line_clear(level: &Level, origin: Vec2, target: Vec2) -> bool {
+    let target = Vec2::new(target.x, origin.y);
+
+    line_clear(level, origin, target)
+}
+
 fn line_clear_to_portal(level: &Level, origin: Vec2, portal: Portal) -> bool {
     let distance = origin.distance(portal.pos);
 
@@ -556,17 +544,18 @@ fn line_clear_from_portal(level: &Level, portal: Portal, target: Vec2) -> bool {
     line_clear(level, origin, target)
 }
 
-fn fallback_enemy_target(
+fn portal_visible_enemy_target(
     level: &Level,
     enemy_pos: Vec2,
     player_pos: Vec2,
     portal_links: &[PortalLink],
-    direct_clear: bool,
-) -> EnemyTarget {
+) -> Option<EnemyTarget> {
     portal_links
         .iter()
         .filter(|link| {
-            line_clear_to_portal(level, enemy_pos, link.source)
+            enemy_pos.distance(link.source.pos) + link.destination.pos.distance(player_pos)
+                <= FILTH_SIGHT_RANGE
+                && line_clear_to_portal(level, enemy_pos, link.source)
                 && line_clear_from_portal(level, link.destination, player_pos)
         })
         .map(|link| EnemyTarget {
@@ -577,10 +566,6 @@ fn fallback_enemy_target(
             enemy_pos
                 .distance(a.pos)
                 .total_cmp(&enemy_pos.distance(b.pos))
-        })
-        .unwrap_or(EnemyTarget {
-            pos: player_pos,
-            can_attack: direct_clear,
         })
 }
 
@@ -593,13 +578,11 @@ fn enemy_overlap_push(a: &Enemy, b: &Enemy) -> Option<Vec2> {
         return None;
     }
 
-    if overlap_x <= overlap_y || delta.y.abs() < 1.0 {
-        let dir = if delta.x >= 0.0 { 1.0 } else { -1.0 };
-
-        Some(Vec2::new(overlap_x * dir, 0.0))
+    let dir = if delta.x.abs() > 0.001 {
+        delta.x.signum()
     } else {
-        let dir = if delta.y >= 0.0 { 1.0 } else { -1.0 };
+        1.0
+    };
 
-        Some(Vec2::new(0.0, overlap_y * dir))
-    }
+    Some(Vec2::new(overlap_x * dir, 0.0))
 }

@@ -462,6 +462,49 @@ impl Checkpoint {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LevelTriggerKind {
+    LevelStart,
+    LevelEnd,
+    EnemySpawn { enemy_id: u16 },
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct LevelTrigger {
+    pub solid: Solid,
+    pub kind: LevelTriggerKind,
+    pub fired: bool,
+}
+
+impl LevelTrigger {
+    pub fn level_start(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self::new(Solid::new(x, y, w, h, false), LevelTriggerKind::LevelStart)
+    }
+
+    pub fn level_end(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self::new(Solid::new(x, y, w, h, false), LevelTriggerKind::LevelEnd)
+    }
+
+    pub fn enemy_spawn(x: f32, y: f32, w: f32, h: f32, enemy_id: u16) -> Self {
+        Self::new(
+            Solid::new(x, y, w, h, false),
+            LevelTriggerKind::EnemySpawn { enemy_id },
+        )
+    }
+
+    pub fn center(self) -> Vec2 {
+        self.solid.center()
+    }
+
+    fn new(solid: Solid, kind: LevelTriggerKind) -> Self {
+        Self {
+            solid,
+            kind,
+            fired: false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Level {
     pub solids: Vec<Solid>,
@@ -469,6 +512,7 @@ pub struct Level {
     pub hazards: Vec<Hazard>,
     pub checkpoints: Vec<Checkpoint>,
     pub enemies: Vec<Enemy>,
+    pub triggers: Vec<LevelTrigger>,
     pub texts: Vec<LevelText>,
     pub world_portals: Vec<WorldPortal>,
 }
@@ -536,6 +580,7 @@ impl Level {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             enemies: Vec::new(),
+            triggers: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
         }
@@ -558,9 +603,26 @@ impl Level {
             hazards: Vec::new(),
             checkpoints: Vec::new(),
             enemies: Vec::new(),
+            triggers: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
         }
+    }
+
+    pub fn reset_runtime_state(&mut self) {
+        for enemy in &mut self.enemies {
+            enemy.reset_for_level_start();
+        }
+        for trigger in &mut self.triggers {
+            trigger.fired = false;
+        }
+    }
+
+    pub fn level_start_pos(&self) -> Option<Vec2> {
+        self.triggers
+            .iter()
+            .find(|trigger| trigger.kind == LevelTriggerKind::LevelStart)
+            .map(|trigger| trigger.center())
     }
 
     pub fn update_doors(

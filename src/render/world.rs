@@ -206,11 +206,15 @@ impl Canvas<'_> {
         let flash = enemy.hurt_flash > 0.0;
         let fill = if flash {
             Color::rgb(255, 235, 235)
+        } else if !enemy.is_active() {
+            Color::rgb(52, 28, 32)
         } else {
             Color::rgb(112, 20, 24)
         };
         let outline = if flash {
             Color::rgb(255, 64, 64)
+        } else if !enemy.is_active() {
+            Color::rgb(132, 64, 72)
         } else {
             Color::rgb(255, 48, 38)
         };

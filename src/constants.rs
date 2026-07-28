@@ -53,6 +53,7 @@ pub const FILTH_ATTACK_COOLDOWN: f32 = 0.8;
 pub const FILTH_ATTACK_DAMAGE: f32 = 30.0;
 pub const FILTH_ATTACK_RANGE: f32 = 58.0;
 pub const FILTH_HEALTH: f32 = 0.5;
+pub const FILTH_SIGHT_RANGE: f32 = 760.0;
 pub const FILTH_SIZE: (f32, f32) = (34.0, 58.0);
 pub const FILTH_SPEED: f32 = 260.0;
 pub const PIERCE_ALT_CHARGE_TIME: f32 = 0.5;

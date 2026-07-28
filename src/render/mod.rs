@@ -8,7 +8,7 @@ mod world;
 use glam::Vec2;
 
 use crate::game::World;
-use crate::game::level::WorldPortal;
+use crate::game::level::{LevelTriggerKind, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::Player;
 use crate::game::portal::{Color, Portal};
@@ -58,6 +58,8 @@ pub struct EditorOverlay {
     pub selected_doors: Vec<usize>,
     pub selected_hazards: Vec<usize>,
     pub selected_checkpoints: Vec<usize>,
+    pub selected_enemies: Vec<usize>,
+    pub selected_triggers: Vec<usize>,
     pub selected_texts: Vec<usize>,
     pub selected_world_portals: Vec<usize>,
     pub selection_count: usize,
@@ -78,6 +80,8 @@ pub struct EditorOverlay {
 pub enum EditorInspector {
     None,
     Door(EditorDoorInspector),
+    Enemy(EditorEnemyInspector),
+    EnemySpawnTrigger(EditorEnemySpawnTriggerInspector),
     WorldPortal(EditorWorldPortalInspector),
 }
 
@@ -86,6 +90,17 @@ pub struct EditorDoorInspector {
     pub automatic: bool,
     pub trigger_radius: f32,
     pub speed: f32,
+}
+
+#[derive(Clone, Copy)]
+pub struct EditorEnemyInspector {
+    pub spawn_id: u16,
+    pub spawn_wave: u16,
+}
+
+#[derive(Clone, Copy)]
+pub struct EditorEnemySpawnTriggerInspector {
+    pub enemy_id: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -213,6 +228,20 @@ impl Renderer {
             canvas.checkpoint(*checkpoint);
         }
 
+        if editor_mode {
+            for trigger in &world.level.triggers {
+                let color = trigger_world_color(trigger.kind);
+
+                canvas.solid_outline(trigger.solid, color);
+                canvas.world_text(
+                    trigger.solid.pos() + Vec2::new(0.0, -14.0),
+                    &trigger_world_label(trigger.kind),
+                    1,
+                    color,
+                );
+            }
+        }
+
         for text in &world.level.texts {
             canvas.world_text(text.pos, &text.text, 2, Color::rgb(210, 218, 230));
         }
@@ -248,7 +277,12 @@ impl Renderer {
             );
         }
 
-        for enemy in &world.level.enemies {
+        for enemy in world
+            .level
+            .enemies
+            .iter()
+            .filter(|enemy| editor_mode || enemy.is_active())
+        {
             canvas.enemy(enemy);
         }
 
@@ -338,6 +372,22 @@ fn player_fill_color(player: &Player) -> Color {
         PLAYER_WALL_SLIDE_FILL
     } else {
         PLAYER_DEFAULT_FILL
+    }
+}
+
+fn trigger_world_label(kind: LevelTriggerKind) -> String {
+    match kind {
+        LevelTriggerKind::LevelStart => "START".to_string(),
+        LevelTriggerKind::LevelEnd => "END".to_string(),
+        LevelTriggerKind::EnemySpawn { enemy_id } => format!("SPAWN {}", enemy_id),
+    }
+}
+
+fn trigger_world_color(kind: LevelTriggerKind) -> Color {
+    match kind {
+        LevelTriggerKind::LevelStart => Color::rgb(107, 221, 144),
+        LevelTriggerKind::LevelEnd => Color::rgb(255, 224, 102),
+        LevelTriggerKind::EnemySpawn { .. } => Color::rgb(255, 88, 76),
     }
 }
 

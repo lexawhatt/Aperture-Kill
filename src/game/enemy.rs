@@ -18,6 +18,10 @@ pub struct Enemy {
     pub prev_pos: Vec2,
     pub vel: Vec2,
     pub health: f32,
+    pub spawn_id: u16,
+    pub spawn_wave: u16,
+    pub active: bool,
+    pub spawned: bool,
     pub attack_cooldown: f32,
     pub hurt_flash: f32,
     pub on_ground: bool,
@@ -31,10 +35,58 @@ impl Enemy {
             prev_pos: Vec2::new(x, y),
             vel: Vec2::ZERO,
             health: FILTH_HEALTH,
+            spawn_id: 0,
+            spawn_wave: 0,
+            active: true,
+            spawned: true,
             attack_cooldown: 0.0,
             hurt_flash: 0.0,
             on_ground: false,
         }
+    }
+
+    pub fn filth_spawn(x: f32, y: f32, spawn_id: u16, spawn_wave: u16) -> Self {
+        let mut enemy = Self::filth(x, y);
+
+        enemy.spawn_id = spawn_id;
+        enemy.spawn_wave = spawn_wave.max(1);
+        enemy.active = false;
+        enemy.spawned = false;
+        enemy
+    }
+
+    pub fn reset_for_level_start(&mut self) {
+        self.prev_pos = self.pos;
+        self.vel = Vec2::ZERO;
+        self.health = FILTH_HEALTH;
+        self.attack_cooldown = 0.0;
+        self.hurt_flash = 0.0;
+        self.on_ground = false;
+        self.active = self.spawn_wave == 0;
+        self.spawned = self.spawn_wave == 0;
+    }
+
+    pub fn activate_spawn(&mut self) {
+        self.prev_pos = self.pos;
+        self.vel = Vec2::ZERO;
+        self.health = FILTH_HEALTH;
+        self.attack_cooldown = 0.0;
+        self.hurt_flash = 0.0;
+        self.on_ground = false;
+        self.active = true;
+        self.spawned = true;
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.health > 0.0
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active && self.is_alive()
+    }
+
+    pub fn mark_dead(&mut self) {
+        self.active = false;
     }
 
     pub fn size(&self) -> Vec2 {

@@ -16,7 +16,7 @@ use crate::constants::{
     PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
     PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
 };
-use crate::game::level::{CollisionGeometry, DoorEvent, Level, WorldPortal};
+use crate::game::level::{CollisionGeometry, DoorEvent, Level, LevelTriggerKind, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
 use crate::game::portal::{Color, Portal};
@@ -233,14 +233,18 @@ impl World {
     }
 
     pub fn from_level(level: &LevelSpec) -> Self {
+        let mut level_data = level.level();
+        level_data.reset_runtime_state();
+        let spawn = level_data.level_start_pos().unwrap_or(level.spawn);
+
         Self {
-            level: level.level(),
-            player: Player::new(level.spawn.x, level.spawn.y),
+            level: level_data,
+            player: Player::new(spawn.x, spawn.y),
             portals: [None, None],
             piercer: PiercerState::new(),
             death: None,
             damage_pulse: DamagePulse::new(),
-            respawn_pos: level.spawn,
+            respawn_pos: spawn,
             sound_events: Vec::new(),
             door_events: Vec::new(),
             footstep_timer: 0.0,
@@ -253,12 +257,15 @@ impl World {
 
     pub fn load_level(&mut self, level: &LevelSpec) {
         self.level = level.level();
-        self.player = Player::new(level.spawn.x, level.spawn.y);
+        self.level.reset_runtime_state();
+        let spawn = self.level.level_start_pos().unwrap_or(level.spawn);
+
+        self.player = Player::new(spawn.x, spawn.y);
         self.portals = [None, None];
         self.piercer = PiercerState::new();
         self.death = None;
         self.damage_pulse = DamagePulse::new();
-        self.respawn_pos = level.spawn;
+        self.respawn_pos = spawn;
         self.sound_events.clear();
         self.door_events.clear();
         self.footstep_timer = 0.0;
@@ -397,6 +404,10 @@ impl World {
         let mut hits = Vec::new();
 
         for (enemy_index, enemy) in self.level.enemies.iter().enumerate() {
+            if !enemy.is_active() {
+                continue;
+            }
+
             for segment in &ray.segments {
                 let segment_delta = segment.end - segment.start;
                 let segment_length = segment_delta.length();
@@ -431,7 +442,7 @@ impl World {
                 break;
             }
         }
-        self.level.enemies.retain(|enemy| enemy.health > 0.0);
+        self.finish_dead_enemies();
 
         self.piercer.beam = Some(PiercerBeam {
             segments: piercer_beam_segments(&ray.segments),
@@ -702,6 +713,10 @@ impl World {
         let collision = CollisionGeometry::new(&self.level.solids, &self.level.doors);
 
         for (enemy, target) in self.level.enemies.iter_mut().zip(targets) {
+            if !enemy.is_active() {
+                continue;
+            }
+
             if let Some(amount) = enemy.update(
                 dt,
                 target.pos,
@@ -717,6 +732,8 @@ impl World {
         }
 
         ai::separate_enemies(&mut self.level.enemies, collision, &collision_portals);
+        self.finish_dead_enemies();
+        self.advance_enemy_spawn_waves();
 
         if damage > 0.0 {
             let health_before = self.player.health;
@@ -795,6 +812,26 @@ impl World {
         if hit_hazard {
             self.respawn_player();
         }
+
+        let mut enemy_spawns = Vec::new();
+        for trigger in &mut self.level.triggers {
+            if trigger.fired || !trigger.solid.overlaps_aabb(center, half_size) {
+                continue;
+            }
+
+            match trigger.kind {
+                LevelTriggerKind::LevelStart | LevelTriggerKind::LevelEnd => {}
+                LevelTriggerKind::EnemySpawn { enemy_id } => {
+                    trigger.fired = true;
+                    enemy_spawns.push(enemy_id);
+                }
+            }
+        }
+
+        for enemy_id in enemy_spawns {
+            self.activate_next_enemy_wave(enemy_id);
+        }
+        self.advance_enemy_spawn_waves();
     }
 
     fn respawn_player(&mut self) {
@@ -806,6 +843,62 @@ impl World {
         self.sound_events.push(SoundEvent::DeathStop);
         self.sound_events
             .push(SoundEvent::HeavyLand(self.respawn_pos));
+    }
+
+    fn finish_dead_enemies(&mut self) {
+        for enemy in &mut self.level.enemies {
+            if enemy.health <= 0.0 {
+                enemy.mark_dead();
+            }
+        }
+
+        self.level
+            .enemies
+            .retain(|enemy| enemy.spawn_wave > 0 || enemy.is_alive());
+    }
+
+    fn advance_enemy_spawn_waves(&mut self) {
+        let triggered_ids = self
+            .level
+            .triggers
+            .iter()
+            .filter_map(|trigger| match trigger.kind {
+                LevelTriggerKind::EnemySpawn { enemy_id } if trigger.fired => Some(enemy_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for enemy_id in triggered_ids {
+            if self
+                .level
+                .enemies
+                .iter()
+                .any(|enemy| enemy.spawn_id == enemy_id && enemy.is_active())
+            {
+                continue;
+            }
+
+            self.activate_next_enemy_wave(enemy_id);
+        }
+    }
+
+    fn activate_next_enemy_wave(&mut self, enemy_id: u16) {
+        let Some(next_wave) = self
+            .level
+            .enemies
+            .iter()
+            .filter(|enemy| enemy.spawn_id == enemy_id && enemy.spawn_wave > 0 && !enemy.spawned)
+            .map(|enemy| enemy.spawn_wave)
+            .min()
+        else {
+            return;
+        };
+
+        for enemy in &mut self.level.enemies {
+            if enemy.spawn_id == enemy_id && enemy.spawn_wave == next_wave && !enemy.spawned {
+                enemy.activate_spawn();
+            }
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 use glam::Vec2;
 
 use super::World;
-use super::level::{Checkpoint, Door, Hazard, Level, Solid, WorldPortal};
+use super::level::{Checkpoint, Door, Hazard, Level, LevelTrigger, Solid, WorldPortal};
 use super::player::{Player, PlayerEvent};
 use super::portal::{Color, Portal};
 use crate::constants::{
@@ -1068,6 +1068,26 @@ fn enemy_chases_player_through_portal_route() {
 }
 
 #[test]
+fn enemy_does_not_chase_player_through_wall_without_los() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![
+            Solid::new(0.0, 200.0, 420.0, 24.0, false),
+            Solid::new(190.0, 80.0, 24.0, 120.0, false),
+        ],
+        enemies: vec![super::enemy::Enemy::filth(150.0, 171.0)],
+        ..Level::empty()
+    };
+    world.player = Player::new(260.0, 164.0);
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!((world.level.enemies[0].pos.x - 150.0).abs() < 0.01);
+}
+
+#[test]
 fn enemy_routes_to_drop_edge_when_player_is_on_lower_platform() {
     let mut world = World::new();
     let input = Input::new();
@@ -1124,6 +1144,52 @@ fn enemy_routes_to_portal_between_platforms() {
 }
 
 #[test]
+fn enemy_spawn_trigger_activates_first_wave_only() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(0.0, 200.0, 420.0, 24.0, false)],
+        enemies: vec![
+            super::enemy::Enemy::filth_spawn(220.0, 171.0, 1, 1),
+            super::enemy::Enemy::filth_spawn(260.0, 171.0, 1, 2),
+        ],
+        triggers: vec![LevelTrigger::enemy_spawn(90.0, 120.0, 80.0, 90.0, 1)],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 164.0);
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.level.enemies[0].is_active());
+    assert!(!world.level.enemies[1].is_active());
+}
+
+#[test]
+fn enemy_spawn_wave_two_waits_for_wave_one_death() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(0.0, 200.0, 420.0, 24.0, false)],
+        enemies: vec![
+            super::enemy::Enemy::filth_spawn(220.0, 171.0, 1, 1),
+            super::enemy::Enemy::filth_spawn(260.0, 171.0, 1, 2),
+        ],
+        triggers: vec![LevelTrigger::enemy_spawn(90.0, 120.0, 80.0, 90.0, 1)],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 164.0);
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+    world.level.enemies[0].health = 0.0;
+    world.update(0.0, &input, 900.0, 600.0);
+
+    assert!(!world.level.enemies[0].is_active());
+    assert!(world.level.enemies[1].is_active());
+}
+
+#[test]
 fn enemies_are_separated_after_tick() {
     let mut world = World::new();
     let input = Input::new();
@@ -1142,6 +1208,28 @@ fn enemies_are_separated_after_tick() {
         .pos
         .distance(world.level.enemies[1].pos);
     assert!(distance >= FILTH_SIZE.0 - 0.1);
+}
+
+#[test]
+fn enemy_separation_does_not_stack_enemies_vertically() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        enemies: vec![
+            super::enemy::Enemy::filth(200.0, 100.0),
+            super::enemy::Enemy::filth(200.0, 140.0),
+        ],
+        ..Level::empty()
+    };
+
+    world.update(0.0, &input, 900.0, 600.0);
+
+    assert_eq!(world.level.enemies[0].pos.y, 100.0);
+    assert_eq!(world.level.enemies[1].pos.y, 140.0);
+    assert!(
+        (world.level.enemies[1].pos.x - world.level.enemies[0].pos.x).abs() >= FILTH_SIZE.0 - 0.1
+    );
 }
 
 #[test]

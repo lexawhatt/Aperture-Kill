@@ -43,6 +43,8 @@ pub(super) enum EditorSelection {
     Door(usize),
     Hazard(usize),
     Checkpoint(usize),
+    Enemy(usize),
+    Trigger(usize),
     Text(usize),
     WorldPortal(usize),
 }
@@ -72,6 +74,20 @@ impl EditorSelection {
     pub(super) fn checkpoint_index(self) -> Option<usize> {
         match self {
             Self::Checkpoint(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn enemy_index(self) -> Option<usize> {
+        match self {
+            Self::Enemy(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn trigger_index(self) -> Option<usize> {
+        match self {
+            Self::Trigger(index) => Some(index),
             _ => None,
         }
     }

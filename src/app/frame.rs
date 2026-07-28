@@ -3,9 +3,10 @@ use std::time::Instant;
 
 // Per-frame order: input, simulation/camera, then render.
 use crate::app::{App, AppMode};
+use crate::game::level::LevelTriggerKind;
 use crate::render::{
-    DebugOverlay, EditorDoorInspector, EditorInspector, EditorOverlay, EditorWorldPortalInspector,
-    RenderFrame, RenderMode,
+    DebugOverlay, EditorDoorInspector, EditorEnemyInspector, EditorEnemySpawnTriggerInspector,
+    EditorInspector, EditorOverlay, EditorWorldPortalInspector, RenderFrame, RenderMode,
 };
 
 impl App {
@@ -146,9 +147,11 @@ impl App {
     fn editor_overlay(&self) -> EditorOverlay {
         let inspector = match (
             self.editor.primary_door_index(),
+            self.editor.primary_enemy_index(),
+            self.editor.primary_trigger_index(),
             self.editor.primary_world_portal_index(),
         ) {
-            (Some(index), _) => self
+            (Some(index), _, _, _) => self
                 .world
                 .level
                 .doors
@@ -161,7 +164,33 @@ impl App {
                     })
                 })
                 .unwrap_or(EditorInspector::None),
-            (_, Some(index)) => self
+            (_, Some(index), _, _) => self
+                .world
+                .level
+                .enemies
+                .get(index)
+                .map(|enemy| {
+                    EditorInspector::Enemy(EditorEnemyInspector {
+                        spawn_id: enemy.spawn_id.max(1),
+                        spawn_wave: enemy.spawn_wave.max(1),
+                    })
+                })
+                .unwrap_or(EditorInspector::None),
+            (_, _, Some(index), _) => self
+                .world
+                .level
+                .triggers
+                .get(index)
+                .and_then(|trigger| match trigger.kind {
+                    LevelTriggerKind::EnemySpawn { enemy_id } => {
+                        Some(EditorInspector::EnemySpawnTrigger(
+                            EditorEnemySpawnTriggerInspector { enemy_id },
+                        ))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(EditorInspector::None),
+            (_, _, _, Some(index)) => self
                 .world
                 .level
                 .world_portals
@@ -187,6 +216,8 @@ impl App {
             selected_doors: self.editor.selected_doors(),
             selected_hazards: self.editor.selected_hazards(),
             selected_checkpoints: self.editor.selected_checkpoints(),
+            selected_enemies: self.editor.selected_enemies(),
+            selected_triggers: self.editor.selected_triggers(),
             selected_texts: self.editor.selected_texts(),
             selected_world_portals: self.editor.selected_world_portals(),
             selection_count: self.editor.selection_count(),

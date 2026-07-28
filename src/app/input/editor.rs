@@ -4,6 +4,7 @@ use winit::keyboard::KeyCode;
 // Editor input mutates solids and pans the world camera.
 use crate::app::App;
 use crate::app::editor::EditorTool;
+use crate::game::level::{LevelTrigger, LevelTriggerKind};
 use crate::game::player::Player;
 
 impl App {
@@ -26,23 +27,32 @@ impl App {
         }
 
         match code {
-            KeyCode::Digit1 => self.create_editor_block(EditorTool::Solid),
-            KeyCode::Digit2 => self.create_editor_block(EditorTool::Portalable),
+            KeyCode::Digit1 => self.create_editor_block(EditorTool::Portalable),
+            KeyCode::Digit2 => self.create_editor_block(EditorTool::Solid),
             KeyCode::Digit3 => self
                 .editor
-                .create_door(self.cursor_world, &mut self.world.level),
+                .create_hazard(self.cursor_world, &mut self.world.level),
             KeyCode::Digit4 => self
                 .editor
-                .create_text(self.cursor_world, &mut self.world.level),
+                .create_door(self.cursor_world, &mut self.world.level),
             KeyCode::Digit5 => self
                 .editor
-                .create_hazard(self.cursor_world, &mut self.world.level),
+                .create_checkpoint(self.cursor_world, &mut self.world.level),
             KeyCode::Digit6 => self
                 .editor
-                .create_checkpoint(self.cursor_world, &mut self.world.level),
+                .create_world_portal(self.cursor_world, &mut self.world.level),
             KeyCode::Digit7 => self
                 .editor
-                .create_world_portal(self.cursor_world, &mut self.world.level),
+                .create_text(self.cursor_world, &mut self.world.level),
+            KeyCode::Digit8 => self
+                .editor
+                .create_filth(self.cursor_world, &mut self.world.level),
+            KeyCode::Digit9 => self
+                .editor
+                .create_level_start(self.cursor_world, &mut self.world.level),
+            KeyCode::Digit0 => self
+                .editor
+                .create_level_end(self.cursor_world, &mut self.world.level),
             KeyCode::Delete | KeyCode::Backspace => {
                 self.editor.delete_selected(&mut self.world.level);
             }
@@ -165,6 +175,18 @@ impl App {
                 self.editor
                     .adjust_selected_door_speed(&mut self.world.level, delta);
             }
+            EditorInspectorAction::EnemyId(delta) => {
+                self.editor
+                    .adjust_selected_enemy_spawn(&mut self.world.level, delta, 0);
+            }
+            EditorInspectorAction::EnemyWave(delta) => {
+                self.editor
+                    .adjust_selected_enemy_spawn(&mut self.world.level, 0, delta);
+            }
+            EditorInspectorAction::SpawnTriggerEnemyId(delta) => {
+                self.editor
+                    .adjust_selected_enemy_spawn_trigger(&mut self.world.level, delta);
+            }
             EditorInspectorAction::PortalId(delta) => {
                 self.editor
                     .adjust_selected_world_portal(&mut self.world.level, delta, 0, 0);
@@ -233,9 +255,26 @@ impl App {
 
     fn set_editor_spawn(&mut self) {
         let spawn = self.editor.snap_point(self.cursor_world);
+        let trigger_size = glam::Vec2::new(48.0, 80.0);
 
         if let Some(level) = self.levels.get_mut(self.current_level) {
             level.spawn = spawn;
+        }
+        if let Some(trigger) = self
+            .world
+            .level
+            .triggers
+            .iter_mut()
+            .find(|trigger| trigger.kind == LevelTriggerKind::LevelStart)
+        {
+            trigger.solid.set_pos(spawn - trigger.solid.size() / 2.0);
+        } else {
+            self.world.level.triggers.push(LevelTrigger::level_start(
+                spawn.x - trigger_size.x / 2.0,
+                spawn.y - trigger_size.y / 2.0,
+                trigger_size.x,
+                trigger_size.y,
+            ));
         }
         self.world.player = Player::new(spawn.x, spawn.y);
         self.editor.mark_dirty();
@@ -244,7 +283,7 @@ impl App {
 
 fn editor_dock_hit(pos: glam::Vec2, width: f32, height: f32) -> Option<EditorTool> {
     let (dock_pos, item_size, gap) = editor_dock_layout(width, height);
-    for index in 0..7 {
+    for index in 0..EditorTool::COUNT {
         let item_pos = dock_pos + glam::Vec2::new(index as f32 * (item_size.x + gap), 0.0);
         if rect_hit(pos, item_pos, item_size) {
             return EditorTool::from_index(index + 1);
@@ -256,9 +295,14 @@ fn editor_dock_hit(pos: glam::Vec2, width: f32, height: f32) -> Option<EditorToo
 
 fn editor_ui_hit(pos: glam::Vec2, width: f32, height: f32) -> bool {
     let (dock_pos, item_size, gap) = editor_dock_layout(width, height);
-    let dock_size = glam::Vec2::new(item_size.x * 7.0 + gap * 6.0, item_size.y);
+    let count = EditorTool::COUNT as f32;
+    let dock_size = glam::Vec2::new(
+        item_size.x * count + gap * (count - 1.0),
+        item_size.y + 40.0,
+    );
 
-    rect_hit(pos, dock_pos, dock_size) || editor_inspector_button_hit(pos, width, height)
+    rect_hit(pos, dock_pos - glam::Vec2::new(0.0, 30.0), dock_size)
+        || editor_inspector_button_hit(pos, width, height)
 }
 
 fn editor_inspector_button_hit(pos: glam::Vec2, width: f32, height: f32) -> bool {
@@ -300,6 +344,14 @@ fn editor_inspector_action_hit(
                         .map(|direction| EditorInspectorAction::DoorSpeed(0.2 * direction as f32))
                 })
         }
+        "FILTH" => editor_stepper_hit(pos, row_pos(88.0), row_width)
+            .map(EditorInspectorAction::EnemyId)
+            .or_else(|| {
+                editor_stepper_hit(pos, row_pos(140.0), row_width)
+                    .map(EditorInspectorAction::EnemyWave)
+            }),
+        "TRIGGER" => editor_stepper_hit(pos, row_pos(88.0), row_width)
+            .map(EditorInspectorAction::SpawnTriggerEnemyId),
         "WORLD PORTAL" => editor_stepper_hit(pos, row_pos(82.0), row_width)
             .map(EditorInspectorAction::PortalId)
             .or_else(|| {
@@ -365,10 +417,11 @@ fn editor_inspector_layout(width: f32, height: f32) -> (glam::Vec2, glam::Vec2) 
 }
 
 fn editor_dock_layout(width: f32, height: f32) -> (glam::Vec2, glam::Vec2, f32) {
-    let gap = 8.0;
-    let max_item_w = ((width - gap * 6.0 - 48.0) / 7.0).max(46.0);
-    let item_size = glam::Vec2::new((width * 0.07).clamp(54.0, 104.0).min(max_item_w), 58.0);
-    let dock_w = item_size.x * 7.0 + gap * 6.0;
+    let gap = 6.0;
+    let count = EditorTool::COUNT as f32;
+    let max_item_w = ((width - gap * (count - 1.0) - 48.0) / count).max(46.0);
+    let item_size = glam::Vec2::new((width * 0.064).clamp(54.0, 94.0).min(max_item_w), 58.0);
+    let dock_w = item_size.x * count + gap * (count - 1.0);
     let pos = glam::Vec2::new((width - dock_w) * 0.5, height - item_size.y - 18.0);
 
     (pos, item_size, gap)
@@ -378,6 +431,9 @@ enum EditorInspectorAction {
     DoorMode,
     DoorRadius(f32),
     DoorSpeed(f32),
+    EnemyId(i16),
+    EnemyWave(i16),
+    SpawnTriggerEnemyId(i16),
     PortalId(i16),
     PortalReceiver(i16),
     PortalPriority(i16),

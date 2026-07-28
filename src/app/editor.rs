@@ -5,7 +5,10 @@ use winit::keyboard::KeyCode;
 
 // Editor stores mode state and applies commands to level objects.
 use crate::constants::PORTAL_WIDTH;
-use crate::game::level::{Checkpoint, Door, Hazard, Level, LevelText, Solid, WorldPortal};
+use crate::game::enemy::Enemy;
+use crate::game::level::{
+    Checkpoint, Door, Hazard, Level, LevelText, LevelTrigger, LevelTriggerKind, Solid, WorldPortal,
+};
 
 use super::editor_geometry::{
     EditorDrag, EditorMoveStart, EditorSelection, SolidHit, drag_from_hit, rect_intersects_rect,
@@ -172,6 +175,55 @@ impl Editor {
         self.dirty = true;
     }
 
+    pub(super) fn create_filth(&mut self, pos: Vec2, level: &mut Level) {
+        self.save_undo(level);
+        let pos = maybe_snap(pos, self.grid_snap);
+
+        level.enemies.push(Enemy::filth_spawn(pos.x, pos.y, 1, 1));
+        self.set_single_selection(EditorSelection::Enemy(level.enemies.len() - 1));
+        self.text_editing = false;
+        self.dirty = true;
+    }
+
+    pub(super) fn create_level_start(&mut self, pos: Vec2, level: &mut Level) {
+        self.save_undo(level);
+        let size = Vec2::new(48.0, 80.0);
+        let pos = place_rect(pos, size, self.grid_snap);
+
+        level
+            .triggers
+            .push(LevelTrigger::level_start(pos.x, pos.y, size.x, size.y));
+        self.set_single_selection(EditorSelection::Trigger(level.triggers.len() - 1));
+        self.text_editing = false;
+        self.dirty = true;
+    }
+
+    pub(super) fn create_level_end(&mut self, pos: Vec2, level: &mut Level) {
+        self.save_undo(level);
+        let size = Vec2::new(48.0, 80.0);
+        let pos = place_rect(pos, size, self.grid_snap);
+
+        level
+            .triggers
+            .push(LevelTrigger::level_end(pos.x, pos.y, size.x, size.y));
+        self.set_single_selection(EditorSelection::Trigger(level.triggers.len() - 1));
+        self.text_editing = false;
+        self.dirty = true;
+    }
+
+    pub(super) fn create_enemy_spawn_trigger(&mut self, pos: Vec2, level: &mut Level) {
+        self.save_undo(level);
+        let size = Vec2::new(128.0, 96.0);
+        let pos = place_rect(pos, size, self.grid_snap);
+
+        level
+            .triggers
+            .push(LevelTrigger::enemy_spawn(pos.x, pos.y, size.x, size.y, 1));
+        self.set_single_selection(EditorSelection::Trigger(level.triggers.len() - 1));
+        self.text_editing = false;
+        self.dirty = true;
+    }
+
     pub(super) fn create_world_portal(&mut self, pos: Vec2, level: &mut Level) {
         self.save_undo(level);
         let center = maybe_snap(pos, self.grid_snap);
@@ -191,11 +243,15 @@ impl Editor {
     pub(super) fn create_active_tool(&mut self, pos: Vec2, level: &mut Level) {
         match self.tool {
             EditorTool::Solid | EditorTool::Portalable => self.create_block(pos, self.tool, level),
-            EditorTool::Door => self.create_door(pos, level),
-            EditorTool::Text => self.create_text(pos, level),
             EditorTool::Hazard => self.create_hazard(pos, level),
+            EditorTool::Door => self.create_door(pos, level),
             EditorTool::Checkpoint => self.create_checkpoint(pos, level),
             EditorTool::WorldPortal => self.create_world_portal(pos, level),
+            EditorTool::Text => self.create_text(pos, level),
+            EditorTool::Filth => self.create_filth(pos, level),
+            EditorTool::LevelStart => self.create_level_start(pos, level),
+            EditorTool::LevelEnd => self.create_level_end(pos, level),
+            EditorTool::EnemySpawnTrigger => self.create_enemy_spawn_trigger(pos, level),
         }
     }
 
@@ -374,6 +430,16 @@ impl Editor {
                     .get(index)
                     .copied()
                     .map(EditorClipboard::Checkpoint),
+                EditorSelection::Enemy(index) => level
+                    .enemies
+                    .get(index)
+                    .cloned()
+                    .map(EditorClipboard::Enemy),
+                EditorSelection::Trigger(index) => level
+                    .triggers
+                    .get(index)
+                    .copied()
+                    .map(EditorClipboard::Trigger),
                 EditorSelection::Text(index) => {
                     level.texts.get(index).cloned().map(EditorClipboard::Text)
                 }
@@ -424,6 +490,18 @@ impl Editor {
                     level.checkpoints.push(checkpoint);
                     pasted.push(EditorSelection::Checkpoint(level.checkpoints.len() - 1));
                 }
+                EditorClipboard::Enemy(mut enemy) => {
+                    enemy.pos += offset;
+                    enemy.prev_pos = enemy.pos;
+                    level.enemies.push(enemy);
+                    pasted.push(EditorSelection::Enemy(level.enemies.len() - 1));
+                }
+                EditorClipboard::Trigger(mut trigger) => {
+                    trigger.solid.translate(offset);
+                    trigger.fired = false;
+                    level.triggers.push(trigger);
+                    pasted.push(EditorSelection::Trigger(level.triggers.len() - 1));
+                }
                 EditorClipboard::Text(mut text) => {
                     text.pos += offset;
                     level.texts.push(text);
@@ -457,6 +535,8 @@ impl Editor {
         level.doors = previous.doors;
         level.hazards = previous.hazards;
         level.checkpoints = previous.checkpoints;
+        level.enemies = previous.enemies;
+        level.triggers = previous.triggers;
         level.texts = previous.texts;
         level.world_portals = previous.world_portals;
         self.normalize_selection(level);
@@ -522,6 +602,8 @@ impl Editor {
             .chain((0..level.doors.len()).map(EditorSelection::Door))
             .chain((0..level.hazards.len()).map(EditorSelection::Hazard))
             .chain((0..level.checkpoints.len()).map(EditorSelection::Checkpoint))
+            .chain((0..level.enemies.len()).map(EditorSelection::Enemy))
+            .chain((0..level.triggers.len()).map(EditorSelection::Trigger))
             .chain((0..level.texts.len()).map(EditorSelection::Text))
             .chain((0..level.world_portals.len()).map(EditorSelection::WorldPortal))
             .collect();
@@ -601,6 +683,51 @@ impl Editor {
         };
 
         door.speed = (door.speed + delta).clamp(0.2, 12.0);
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_enemy_spawn(
+        &mut self,
+        level: &mut Level,
+        id_delta: i16,
+        wave_delta: i16,
+    ) -> bool {
+        let Some(EditorSelection::Enemy(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(enemy) = level.enemies.get_mut(index) else {
+            return false;
+        };
+
+        enemy.spawn_id = offset_u16_min(enemy.spawn_id, id_delta, 1);
+        enemy.spawn_wave = offset_u16_min(enemy.spawn_wave.max(1), wave_delta, 1);
+        enemy.active = false;
+        enemy.spawned = false;
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn adjust_selected_enemy_spawn_trigger(
+        &mut self,
+        level: &mut Level,
+        id_delta: i16,
+    ) -> bool {
+        let Some(EditorSelection::Trigger(index)) = self.primary_selected() else {
+            return false;
+        };
+
+        self.save_undo(level);
+        let Some(trigger) = level.triggers.get_mut(index) else {
+            return false;
+        };
+        let LevelTriggerKind::EnemySpawn { enemy_id } = &mut trigger.kind else {
+            return false;
+        };
+
+        *enemy_id = offset_u16_min(*enemy_id, id_delta, 1);
         self.dirty = true;
         true
     }
@@ -760,6 +887,14 @@ impl Editor {
         self.selected_indices(EditorSelection::checkpoint_index)
     }
 
+    pub(super) fn selected_enemies(&self) -> Vec<usize> {
+        self.selected_indices(EditorSelection::enemy_index)
+    }
+
+    pub(super) fn selected_triggers(&self) -> Vec<usize> {
+        self.selected_indices(EditorSelection::trigger_index)
+    }
+
     pub(super) fn selected_texts(&self) -> Vec<usize> {
         self.selected_indices(EditorSelection::text_index)
     }
@@ -782,6 +917,8 @@ impl Editor {
             Some(EditorSelection::Door(_)) => EditorSelectionKind::Door,
             Some(EditorSelection::Hazard(_)) => EditorSelectionKind::Hazard,
             Some(EditorSelection::Checkpoint(_)) => EditorSelectionKind::Checkpoint,
+            Some(EditorSelection::Enemy(_)) => EditorSelectionKind::Enemy,
+            Some(EditorSelection::Trigger(_)) => EditorSelectionKind::Trigger,
             Some(EditorSelection::Text(_)) => EditorSelectionKind::Text,
             Some(EditorSelection::WorldPortal(_)) => EditorSelectionKind::WorldPortal,
             None => EditorSelectionKind::None,
@@ -798,6 +935,20 @@ impl Editor {
     pub(super) fn primary_world_portal_index(&self) -> Option<usize> {
         match self.primary_selected()? {
             EditorSelection::WorldPortal(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn primary_enemy_index(&self) -> Option<usize> {
+        match self.primary_selected()? {
+            EditorSelection::Enemy(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn primary_trigger_index(&self) -> Option<usize> {
+        match self.primary_selected()? {
+            EditorSelection::Trigger(index) => Some(index),
             _ => None,
         }
     }
@@ -899,6 +1050,29 @@ impl Editor {
             return Some((EditorSelection::Checkpoint(index), hit));
         }
 
+        if let Some((index, hit)) =
+            level
+                .triggers
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, trigger)| {
+                    solid_at(pos, trigger.solid, false).map(|hit| (index, hit))
+                })
+        {
+            return Some((EditorSelection::Trigger(index), hit));
+        }
+
+        if let Some((index, hit)) = level
+            .enemies
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, enemy)| solid_at(pos, enemy.solid(), false).map(|hit| (index, hit)))
+        {
+            return Some((EditorSelection::Enemy(index), hit));
+        }
+
         if let Some((index, hit)) = level
             .hazards
             .iter()
@@ -951,6 +1125,17 @@ impl Editor {
                 .get(index)
                 .copied()
                 .map(|checkpoint| drag_from_hit(hit, pos, checkpoint.solid()))
+                .unwrap_or(EditorDrag::None),
+            EditorSelection::Enemy(index) => level
+                .enemies
+                .get(index)
+                .map(|enemy| drag_from_hit(hit, pos, enemy.solid()))
+                .unwrap_or(EditorDrag::None),
+            EditorSelection::Trigger(index) => level
+                .triggers
+                .get(index)
+                .copied()
+                .map(|trigger| drag_from_hit(hit, pos, trigger.solid))
                 .unwrap_or(EditorDrag::None),
             EditorSelection::Text(index) => level
                 .texts
@@ -1005,6 +1190,22 @@ impl Editor {
                 solid_intersects_rect(checkpoint.solid(), rect_pos, rect_size)
                     .then_some(EditorSelection::Checkpoint(index))
             });
+        let enemies = level
+            .enemies
+            .iter()
+            .enumerate()
+            .filter_map(|(index, enemy)| {
+                solid_intersects_rect(enemy.solid(), rect_pos, rect_size)
+                    .then_some(EditorSelection::Enemy(index))
+            });
+        let triggers = level
+            .triggers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, trigger)| {
+                solid_intersects_rect(trigger.solid, rect_pos, rect_size)
+                    .then_some(EditorSelection::Trigger(index))
+            });
         let texts = level.texts.iter().enumerate().filter_map(|(index, text)| {
             let (text_pos, text_size) = text_bounds(text);
 
@@ -1026,6 +1227,8 @@ impl Editor {
             .chain(doors)
             .chain(hazards)
             .chain(checkpoints)
+            .chain(enemies)
+            .chain(triggers)
             .chain(texts)
             .chain(world_portals)
             .collect()
@@ -1103,6 +1306,8 @@ impl Editor {
                 EditorSelection::Door(index) => *index < level.doors.len(),
                 EditorSelection::Hazard(index) => *index < level.hazards.len(),
                 EditorSelection::Checkpoint(index) => *index < level.checkpoints.len(),
+                EditorSelection::Enemy(index) => *index < level.enemies.len(),
+                EditorSelection::Trigger(index) => *index < level.triggers.len(),
                 EditorSelection::Text(index) => *index < level.texts.len(),
                 EditorSelection::WorldPortal(index) => *index < level.world_portals.len(),
             })
@@ -1124,6 +1329,8 @@ impl Editor {
             doors: level.doors.clone(),
             hazards: level.hazards.clone(),
             checkpoints: level.checkpoints.clone(),
+            enemies: level.enemies.clone(),
+            triggers: level.triggers.clone(),
             texts: level.texts.clone(),
             world_portals: level.world_portals.clone(),
         };
@@ -1150,6 +1357,13 @@ impl Editor {
                 .checkpoints
                 .get(index)
                 .map(|checkpoint| checkpoint.solid.pos()),
+            EditorSelection::Enemy(index) => level
+                .enemies
+                .get(index)
+                .map(|enemy| enemy.pos - enemy.half_size()),
+            EditorSelection::Trigger(index) => {
+                level.triggers.get(index).map(|trigger| trigger.solid.pos())
+            }
             EditorSelection::Text(index) => level.texts.get(index).map(|text| text.pos),
             EditorSelection::WorldPortal(index) => {
                 level.world_portals.get(index).map(|portal| portal.center())
@@ -1179,6 +1393,17 @@ impl Editor {
             EditorSelection::Checkpoint(index) => {
                 if let Some(checkpoint) = level.checkpoints.get_mut(index) {
                     checkpoint.solid.set_pos(pos);
+                }
+            }
+            EditorSelection::Enemy(index) => {
+                if let Some(enemy) = level.enemies.get_mut(index) {
+                    enemy.pos = pos + enemy.half_size();
+                    enemy.prev_pos = enemy.pos;
+                }
+            }
+            EditorSelection::Trigger(index) => {
+                if let Some(trigger) = level.triggers.get_mut(index) {
+                    trigger.solid.set_pos(pos);
                 }
             }
             EditorSelection::Text(index) => {
@@ -1227,6 +1452,19 @@ impl Editor {
                     ));
                 }
             }
+            EditorSelection::Enemy(index) => {
+                if let Some(enemy) = level.enemies.get_mut(index) {
+                    enemy.pos = maybe_snap(center, grid_snap);
+                    enemy.prev_pos = enemy.pos;
+                }
+            }
+            EditorSelection::Trigger(index) => {
+                if let Some(trigger) = level.triggers.get_mut(index) {
+                    trigger
+                        .solid
+                        .set_pos(maybe_snap(center - trigger.solid.size() / 2.0, grid_snap));
+                }
+            }
             EditorSelection::Text(index) => {
                 if let Some(text) = level.texts.get_mut(index) {
                     let (_, size) = text_bounds(text);
@@ -1252,7 +1490,13 @@ impl Editor {
                 .checkpoints
                 .get_mut(index)
                 .map(|checkpoint| &mut checkpoint.solid),
-            EditorSelection::Text(_) | EditorSelection::WorldPortal(_) => None,
+            EditorSelection::Trigger(index) => level
+                .triggers
+                .get_mut(index)
+                .map(|trigger| &mut trigger.solid),
+            EditorSelection::Text(_)
+            | EditorSelection::Enemy(_)
+            | EditorSelection::WorldPortal(_) => None,
         }
     }
 
@@ -1317,6 +1561,8 @@ struct LevelSnapshot {
     doors: Vec<Door>,
     hazards: Vec<Hazard>,
     checkpoints: Vec<Checkpoint>,
+    enemies: Vec<Enemy>,
+    triggers: Vec<LevelTrigger>,
     texts: Vec<LevelText>,
     world_portals: Vec<WorldPortal>,
 }
@@ -1327,6 +1573,8 @@ enum EditorClipboard {
     Door(Door),
     Hazard(Hazard),
     Checkpoint(Checkpoint),
+    Enemy(Enemy),
+    Trigger(LevelTrigger),
     Text(LevelText),
     WorldPortal(WorldPortal),
 }
@@ -1341,54 +1589,72 @@ struct EditorPan {
 
 #[derive(Clone, Copy)]
 pub(super) enum EditorTool {
-    Solid,
     Portalable,
-    Door,
-    Text,
+    Solid,
     Hazard,
+    Door,
     Checkpoint,
     WorldPortal,
+    Text,
+    Filth,
+    LevelStart,
+    LevelEnd,
+    EnemySpawnTrigger,
 }
 
 impl EditorTool {
+    pub(super) const COUNT: usize = 11;
+
     pub(super) fn portalable(self) -> bool {
         matches!(self, Self::Portalable)
     }
 
     pub(super) fn index(self) -> usize {
         match self {
-            Self::Solid => 1,
-            Self::Portalable => 2,
-            Self::Door => 3,
-            Self::Text => 4,
-            Self::Hazard => 5,
-            Self::Checkpoint => 6,
-            Self::WorldPortal => 7,
+            Self::Portalable => 1,
+            Self::Solid => 2,
+            Self::Hazard => 3,
+            Self::Door => 4,
+            Self::Checkpoint => 5,
+            Self::WorldPortal => 6,
+            Self::Text => 7,
+            Self::Filth => 8,
+            Self::LevelStart => 9,
+            Self::LevelEnd => 10,
+            Self::EnemySpawnTrigger => 11,
         }
     }
 
     pub(super) fn from_index(index: usize) -> Option<Self> {
         match index {
-            1 => Some(Self::Solid),
-            2 => Some(Self::Portalable),
-            3 => Some(Self::Door),
-            4 => Some(Self::Text),
-            5 => Some(Self::Hazard),
-            6 => Some(Self::Checkpoint),
-            7 => Some(Self::WorldPortal),
+            1 => Some(Self::Portalable),
+            2 => Some(Self::Solid),
+            3 => Some(Self::Hazard),
+            4 => Some(Self::Door),
+            5 => Some(Self::Checkpoint),
+            6 => Some(Self::WorldPortal),
+            7 => Some(Self::Text),
+            8 => Some(Self::Filth),
+            9 => Some(Self::LevelStart),
+            10 => Some(Self::LevelEnd),
+            11 => Some(Self::EnemySpawnTrigger),
             _ => None,
         }
     }
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Solid => "SOLID",
-            Self::Portalable => "PORTAL",
-            Self::Door => "DOOR",
-            Self::Text => "TEXT",
+            Self::Portalable => "P SURF",
+            Self::Solid => "SURFACE",
             Self::Hazard => "ACID",
+            Self::Door => "DOOR",
             Self::Checkpoint => "CHECK",
             Self::WorldPortal => "W PORT",
+            Self::Text => "TEXT",
+            Self::Filth => "FILTH",
+            Self::LevelStart => "START",
+            Self::LevelEnd => "END",
+            Self::EnemySpawnTrigger => "SPAWN",
         }
     }
 }
@@ -1400,6 +1666,8 @@ pub(super) enum EditorSelectionKind {
     Door,
     Hazard,
     Checkpoint,
+    Enemy,
+    Trigger,
     Text,
     WorldPortal,
 }
@@ -1412,6 +1680,8 @@ impl EditorSelectionKind {
             Self::Door => "DOOR",
             Self::Hazard => "ACID",
             Self::Checkpoint => "CHECKPOINT",
+            Self::Enemy => "FILTH",
+            Self::Trigger => "TRIGGER",
             Self::Text => "TEXT",
             Self::WorldPortal => "WORLD PORTAL",
         }
@@ -1432,6 +1702,8 @@ struct SelectionBuckets {
     doors: Vec<usize>,
     hazards: Vec<usize>,
     checkpoints: Vec<usize>,
+    enemies: Vec<usize>,
+    triggers: Vec<usize>,
     texts: Vec<usize>,
     world_portals: Vec<usize>,
 }
@@ -1453,6 +1725,8 @@ impl SelectionBuckets {
             EditorSelection::Door(index) => self.doors.push(index),
             EditorSelection::Hazard(index) => self.hazards.push(index),
             EditorSelection::Checkpoint(index) => self.checkpoints.push(index),
+            EditorSelection::Enemy(index) => self.enemies.push(index),
+            EditorSelection::Trigger(index) => self.triggers.push(index),
             EditorSelection::Text(index) => self.texts.push(index),
             EditorSelection::WorldPortal(index) => self.world_portals.push(index),
         }
@@ -1463,6 +1737,8 @@ impl SelectionBuckets {
         remove_indices(&mut level.doors, self.doors);
         remove_indices(&mut level.hazards, self.hazards);
         remove_indices(&mut level.checkpoints, self.checkpoints);
+        remove_indices(&mut level.enemies, self.enemies);
+        remove_indices(&mut level.triggers, self.triggers);
         remove_indices(&mut level.texts, self.texts);
         remove_indices(&mut level.world_portals, self.world_portals);
     }
@@ -1474,8 +1750,10 @@ fn selection_sort_key(selection: &EditorSelection) -> (usize, usize) {
         EditorSelection::Door(index) => (1, *index),
         EditorSelection::Hazard(index) => (2, *index),
         EditorSelection::Checkpoint(index) => (3, *index),
-        EditorSelection::Text(index) => (4, *index),
-        EditorSelection::WorldPortal(index) => (5, *index),
+        EditorSelection::Enemy(index) => (4, *index),
+        EditorSelection::Trigger(index) => (5, *index),
+        EditorSelection::Text(index) => (6, *index),
+        EditorSelection::WorldPortal(index) => (7, *index),
     }
 }
 
@@ -1503,6 +1781,16 @@ fn selection_bounds(level: &Level, selected: &[EditorSelection]) -> (Vec2, Vec2)
             EditorSelection::Checkpoint(index) => {
                 if let Some(checkpoint) = level.checkpoints.get(index) {
                     include_solid_bounds(checkpoint.solid, &mut min, &mut max);
+                }
+            }
+            EditorSelection::Enemy(index) => {
+                if let Some(enemy) = level.enemies.get(index) {
+                    include_solid_bounds(enemy.solid(), &mut min, &mut max);
+                }
+            }
+            EditorSelection::Trigger(index) => {
+                if let Some(trigger) = level.triggers.get(index) {
+                    include_solid_bounds(trigger.solid, &mut min, &mut max);
                 }
             }
             EditorSelection::Text(index) => {
@@ -1556,6 +1844,10 @@ fn offset_u16(value: u16, delta: i16) -> u16 {
     }
 }
 
+fn offset_u16_min(value: u16, delta: i16, min: u16) -> u16 {
+    offset_u16(value, delta).max(min)
+}
+
 fn clipboard_bounds(clipboard: &[EditorClipboard]) -> (Vec2, Vec2) {
     let mut min = Vec2::splat(f32::INFINITY);
     let mut max = Vec2::splat(f32::NEG_INFINITY);
@@ -1569,6 +1861,12 @@ fn clipboard_bounds(clipboard: &[EditorClipboard]) -> (Vec2, Vec2) {
             }
             EditorClipboard::Checkpoint(checkpoint) => {
                 include_solid_bounds(checkpoint.solid, &mut min, &mut max)
+            }
+            EditorClipboard::Enemy(enemy) => {
+                include_solid_bounds(enemy.solid(), &mut min, &mut max)
+            }
+            EditorClipboard::Trigger(trigger) => {
+                include_solid_bounds(trigger.solid, &mut min, &mut max)
             }
             EditorClipboard::Text(text) => {
                 let (pos, size) = text_bounds(text);

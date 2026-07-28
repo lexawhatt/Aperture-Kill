@@ -6,6 +6,7 @@ mod layout;
 use crate::constants::{
     MAX_DASH_CHARGES, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_SHUTDOWN_FLASH_TIME,
 };
+use crate::game::level::LevelTriggerKind;
 use crate::game::levels::LevelSpec;
 use crate::game::portal::Color;
 use crate::game::{DeathSequence, World};
@@ -570,6 +571,8 @@ impl Canvas<'_> {
         self.selected_door_overlay(world, overlay);
         self.selected_hazard_overlay(world, overlay);
         self.selected_checkpoint_overlay(world, overlay);
+        self.selected_enemy_overlay(world, overlay);
+        self.selected_trigger_overlay(world, overlay);
         self.selected_text_overlay(world, overlay);
         self.selected_world_portal_overlay(world, overlay);
         self.marquee_overlay(overlay);
@@ -760,6 +763,53 @@ impl Canvas<'_> {
         }
     }
 
+    fn selected_enemy_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
+        for (index, enemy) in world.level.enemies.iter().enumerate() {
+            if !overlay.selected_enemies.contains(&index) {
+                continue;
+            }
+
+            let solid = enemy.solid();
+
+            self.solid_outline(solid, Color::rgb(255, 88, 76));
+            if overlay.selection_count == 1 {
+                self.world_text(
+                    solid.world_from_local(Vec2::ZERO) + Vec2::new(0.0, -18.0),
+                    &format!(
+                        "FILTH ID:{} WAVE:{}",
+                        enemy.spawn_id.max(1),
+                        enemy.spawn_wave.max(1)
+                    ),
+                    1,
+                    Color::rgb(255, 88, 76),
+                );
+            }
+        }
+    }
+
+    fn selected_trigger_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
+        for (index, trigger) in world.level.triggers.iter().enumerate() {
+            if !overlay.selected_triggers.contains(&index) {
+                continue;
+            }
+
+            let color = trigger_color(trigger.kind);
+
+            self.solid_outline(trigger.solid, color);
+            if overlay.selection_count == 1 {
+                self.resize_handles(trigger.solid, color);
+            }
+            let label = trigger_label(trigger.kind);
+
+            self.world_text(
+                trigger.solid.world_from_local(Vec2::ZERO) + Vec2::new(0.0, -18.0),
+                &label,
+                1,
+                color,
+            );
+        }
+    }
+
     fn selected_text_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, text) in world.level.texts.iter().enumerate() {
             if !overlay.selected_texts.contains(&index) {
@@ -875,24 +925,45 @@ impl Canvas<'_> {
     fn editor_dock(&mut self, overlay: &EditorOverlay) {
         let width = self.width as f32;
         let height = self.height as f32;
-        let gap = 8.0;
-        let max_item_w = ((width - gap * 6.0 - 48.0) / 7.0).max(46.0);
-        let item_size = Vec2::new((width * 0.07).clamp(54.0, 104.0).min(max_item_w), 58.0);
-        let dock_w = item_size.x * 7.0 + gap * 6.0;
+        let gap = 6.0;
+        let tool_count = 11.0;
+        let max_item_w = ((width - gap * (tool_count - 1.0) - 48.0) / tool_count).max(46.0);
+        let item_size = Vec2::new((width * 0.064).clamp(54.0, 94.0).min(max_item_w), 58.0);
+        let dock_w = item_size.x * tool_count + gap * (tool_count - 1.0);
         let dock_pos = Vec2::new((width - dock_w) * 0.5, height - item_size.y - 18.0);
         let bg = Rect {
-            pos: dock_pos - Vec2::new(12.0, 10.0),
-            size: Vec2::new(dock_w + 24.0, item_size.y + 20.0),
+            pos: dock_pos - Vec2::new(12.0, 30.0),
+            size: Vec2::new(dock_w + 24.0, item_size.y + 40.0),
         };
 
         self.fill_rect(bg, Color::rgb(5, 7, 10));
         self.beveled_rect_outline(bg, 14.0, Color::rgb(92, 105, 125));
+        self.editor_dock_categories(dock_pos, item_size, gap);
 
-        for index in 0..7 {
+        for index in 0..11 {
             let tool_index = index + 1;
             let pos = dock_pos + Vec2::new(index as f32 * (item_size.x + gap), 0.0);
             let active = overlay.active_tool == tool_index;
             self.editor_dock_item(pos, item_size, tool_index, active);
+        }
+    }
+
+    fn editor_dock_categories(&mut self, dock_pos: Vec2, item_size: Vec2, gap: f32) {
+        for (label, start, count) in [
+            ("BUILD", 0, 3),
+            ("UTILITY", 3, 4),
+            ("ENEMY", 7, 1),
+            ("TRIGGERS", 8, 3),
+        ] {
+            let x0 = dock_pos.x + start as f32 * (item_size.x + gap);
+            let width = item_size.x * count as f32 + gap * (count - 1) as f32;
+
+            self.centered_text(
+                Vec2::new(x0 + width * 0.5, dock_pos.y - 22.0),
+                label,
+                1,
+                Color::rgb(180, 190, 205),
+            );
         }
     }
 
@@ -917,15 +988,7 @@ impl Canvas<'_> {
 
     fn editor_tool_icon(&mut self, center: Vec2, tool_index: usize, color: Color) {
         match tool_index {
-            1 => self.beveled_rect_outline(
-                Rect {
-                    pos: center - Vec2::new(18.0, 10.0),
-                    size: Vec2::new(36.0, 20.0),
-                },
-                4.0,
-                color,
-            ),
-            2 => {
+            1 => {
                 self.beveled_rect_outline(
                     Rect {
                         pos: center - Vec2::new(18.0, 10.0),
@@ -940,16 +1003,15 @@ impl Canvas<'_> {
                     color,
                 );
             }
-            3 => self.beveled_rect_outline(
+            2 => self.beveled_rect_outline(
                 Rect {
-                    pos: center - Vec2::new(10.0, 18.0),
-                    size: Vec2::new(20.0, 36.0),
+                    pos: center - Vec2::new(18.0, 10.0),
+                    size: Vec2::new(36.0, 20.0),
                 },
-                5.0,
+                4.0,
                 color,
             ),
-            4 => self.text(center - Vec2::new(15.0, 9.0), "T", 3, color),
-            5 => {
+            3 => {
                 self.draw_line(
                     center + Vec2::new(-18.0, 10.0),
                     center + Vec2::new(18.0, 10.0),
@@ -971,7 +1033,15 @@ impl Canvas<'_> {
                     color,
                 );
             }
-            6 => {
+            4 => self.beveled_rect_outline(
+                Rect {
+                    pos: center - Vec2::new(10.0, 18.0),
+                    size: Vec2::new(20.0, 36.0),
+                },
+                5.0,
+                color,
+            ),
+            5 => {
                 self.draw_line(
                     center + Vec2::new(0.0, -16.0),
                     center + Vec2::new(0.0, 16.0),
@@ -988,7 +1058,7 @@ impl Canvas<'_> {
                     color,
                 );
             }
-            7 => {
+            6 => {
                 self.draw_line(
                     center + Vec2::new(-16.0, -14.0),
                     center + Vec2::new(16.0, -14.0),
@@ -1010,6 +1080,71 @@ impl Canvas<'_> {
                     color,
                 );
                 self.text(center - Vec2::new(9.0, 8.0), "P", 2, color);
+            }
+            7 => self.text(center - Vec2::new(15.0, 9.0), "T", 3, color),
+            8 => {
+                self.beveled_rect_outline(
+                    Rect {
+                        pos: center - Vec2::new(13.0, 15.0),
+                        size: Vec2::new(26.0, 30.0),
+                    },
+                    6.0,
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(-9.0, -5.0),
+                    center + Vec2::new(9.0, 5.0),
+                    color,
+                );
+            }
+            9 => {
+                self.draw_line(
+                    center + Vec2::new(0.0, -17.0),
+                    center + Vec2::new(0.0, 17.0),
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(0.0, -16.0),
+                    center + Vec2::new(14.0, -8.0),
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(14.0, -8.0),
+                    center + Vec2::new(0.0, 0.0),
+                    color,
+                );
+            }
+            10 => {
+                self.draw_line(
+                    center + Vec2::new(-14.0, -14.0),
+                    center + Vec2::new(14.0, 14.0),
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(14.0, -14.0),
+                    center + Vec2::new(-14.0, 14.0),
+                    color,
+                );
+            }
+            11 => {
+                self.beveled_rect_outline(
+                    Rect {
+                        pos: center - Vec2::new(17.0, 12.0),
+                        size: Vec2::new(34.0, 24.0),
+                    },
+                    5.0,
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(-5.0, -18.0),
+                    center + Vec2::new(-5.0, 18.0),
+                    color,
+                );
+                self.draw_line(
+                    center + Vec2::new(7.0, -18.0),
+                    center + Vec2::new(7.0, 18.0),
+                    color,
+                );
             }
             _ => {}
         }
@@ -1085,6 +1220,28 @@ impl Canvas<'_> {
                     size.x - 36.0,
                     "SPEED",
                     &format!("{:.1}", door.speed),
+                );
+            }
+            EditorInspector::Enemy(enemy) => {
+                self.editor_stepper_row(
+                    pos + Vec2::new(18.0, 88.0),
+                    size.x - 36.0,
+                    "ENEMY ID",
+                    &enemy.spawn_id.to_string(),
+                );
+                self.editor_stepper_row(
+                    pos + Vec2::new(18.0, 140.0),
+                    size.x - 36.0,
+                    "WAVE",
+                    &enemy.spawn_wave.to_string(),
+                );
+            }
+            EditorInspector::EnemySpawnTrigger(trigger) => {
+                self.editor_stepper_row(
+                    pos + Vec2::new(18.0, 88.0),
+                    size.x - 36.0,
+                    "ENEMY ID",
+                    &trigger.enemy_id.to_string(),
                 );
             }
             EditorInspector::WorldPortal(portal) => {
@@ -1952,5 +2109,21 @@ impl Canvas<'_> {
             self.draw_world_line(previous, next, Color::rgb(80, 190, 255));
             previous = next;
         }
+    }
+}
+
+fn trigger_label(kind: LevelTriggerKind) -> String {
+    match kind {
+        LevelTriggerKind::LevelStart => "LEVEL START".to_string(),
+        LevelTriggerKind::LevelEnd => "LEVEL END".to_string(),
+        LevelTriggerKind::EnemySpawn { enemy_id } => format!("ENEMY SPAWN ID:{}", enemy_id),
+    }
+}
+
+fn trigger_color(kind: LevelTriggerKind) -> Color {
+    match kind {
+        LevelTriggerKind::LevelStart => Color::rgb(107, 221, 144),
+        LevelTriggerKind::LevelEnd => Color::rgb(255, 224, 102),
+        LevelTriggerKind::EnemySpawn { .. } => Color::rgb(255, 88, 76),
     }
 }
