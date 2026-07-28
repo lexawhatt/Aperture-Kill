@@ -1088,6 +1088,42 @@ fn enemy_routes_to_drop_edge_when_player_is_on_lower_platform() {
 }
 
 #[test]
+fn enemy_routes_to_portal_between_platforms() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![
+            Solid::new(0.0, 200.0, 220.0, 24.0, false),
+            Solid::new(300.0, 100.0, 260.0, 24.0, false),
+        ],
+        enemies: vec![super::enemy::Enemy::filth(150.0, 171.0)],
+        ..Level::empty()
+    };
+    world.player = Player::new(470.0, 64.0);
+    world.portals = [
+        Some(Portal::new(
+            50.0,
+            171.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::BLUE,
+        )),
+        Some(Portal::new(
+            350.0,
+            71.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::ORANGE,
+        )),
+    ];
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+
+    assert!(world.level.enemies[0].pos.x < 150.0);
+}
+
+#[test]
 fn enemies_are_separated_after_tick() {
     let mut world = World::new();
     let input = Input::new();
