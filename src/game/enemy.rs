@@ -14,6 +14,7 @@ pub enum EnemyKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Enemy {
     pub kind: EnemyKind,
+    pub spawn_pos: Vec2,
     pub pos: Vec2,
     pub prev_pos: Vec2,
     pub vel: Vec2,
@@ -31,6 +32,7 @@ impl Enemy {
     pub fn filth(x: f32, y: f32) -> Self {
         Self {
             kind: EnemyKind::Filth,
+            spawn_pos: Vec2::new(x, y),
             pos: Vec2::new(x, y),
             prev_pos: Vec2::new(x, y),
             vel: Vec2::ZERO,
@@ -56,6 +58,7 @@ impl Enemy {
     }
 
     pub fn reset_for_level_start(&mut self) {
+        self.pos = self.spawn_pos;
         self.prev_pos = self.pos;
         self.vel = Vec2::ZERO;
         self.health = FILTH_HEALTH;
@@ -67,6 +70,7 @@ impl Enemy {
     }
 
     pub fn activate_spawn(&mut self) {
+        self.pos = self.spawn_pos;
         self.prev_pos = self.pos;
         self.vel = Vec2::ZERO;
         self.health = FILTH_HEALTH;
@@ -99,12 +103,20 @@ impl Enemy {
         self.size() / 2.0
     }
 
+    pub fn spawn_solid(&self) -> Solid {
+        self.solid_at(self.spawn_pos)
+    }
+
     pub fn solid(&self) -> Solid {
+        self.solid_at(self.pos)
+    }
+
+    fn solid_at(&self, pos: Vec2) -> Solid {
         let size = self.size();
 
         Solid::new(
-            self.pos.x - size.x / 2.0,
-            self.pos.y - size.y / 2.0,
+            pos.x - size.x / 2.0,
+            pos.y - size.y / 2.0,
             size.x,
             size.y,
             false,
@@ -118,12 +130,22 @@ impl Enemy {
         can_attack: bool,
         collision: CollisionGeometry<'_>,
         portals: &[crate::game::portal::Portal],
+        speed_multiplier: f32,
+        damage_multiplier: f32,
     ) -> Option<f32> {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt).max(0.0);
 
         match self.kind {
-            EnemyKind::Filth => self.update_filth(dt, target_pos, can_attack, collision, portals),
+            EnemyKind::Filth => self.update_filth(
+                dt,
+                target_pos,
+                can_attack,
+                collision,
+                portals,
+                speed_multiplier,
+                damage_multiplier,
+            ),
         }
     }
 
@@ -145,6 +167,8 @@ impl Enemy {
         can_attack: bool,
         collision: CollisionGeometry<'_>,
         portals: &[crate::game::portal::Portal],
+        speed_multiplier: f32,
+        damage_multiplier: f32,
     ) -> Option<f32> {
         self.prev_pos = self.pos;
 
@@ -155,7 +179,7 @@ impl Enemy {
             0.0
         };
 
-        self.vel.x = dir_x * FILTH_SPEED;
+        self.vel.x = dir_x * FILTH_SPEED * speed_multiplier.max(0.0);
         self.vel.y += crate::constants::GRAVITY * dt;
         self.pos += self.vel * dt;
         let half_size = self.half_size();
@@ -168,7 +192,7 @@ impl Enemy {
 
         if can_attack && to_target.length() <= FILTH_ATTACK_RANGE && self.attack_cooldown <= 0.0 {
             self.attack_cooldown = FILTH_ATTACK_COOLDOWN;
-            return Some(FILTH_ATTACK_DAMAGE);
+            return Some(FILTH_ATTACK_DAMAGE * damage_multiplier.max(0.0));
         }
 
         None

@@ -3,20 +3,106 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
 
 // Level menu input is screen-space UI, not world-space editing.
-use crate::app::menu::{menu_hit, options_drag_volume, options_hit, social_hit};
-use crate::app::{App, AppMode};
+use crate::app::menu::{
+    chapter_hit, custom_level_hit, difficulty_hit, layer_level_hit, menu_hit, options_drag_volume,
+    options_hit, social_hit,
+};
+use crate::app::{App, AppMode, MenuScreen};
+use crate::game::Difficulty;
+use crate::game::progression::{CHAPTERS, is_custom_chapter};
 use crate::settings::{OptionsClick, VolumeKind};
 
 impl App {
     pub(in crate::app) fn handle_menu_key(&mut self, code: KeyCode) {
+        self.clamp_menu_cursors();
+
+        match self.menu_screen {
+            MenuScreen::Main => self.handle_main_menu_key(code),
+            MenuScreen::Difficulty => self.handle_difficulty_menu_key(code),
+            MenuScreen::Chapter => self.handle_chapter_menu_key(code),
+            MenuScreen::Layer => self.handle_layer_menu_key(code),
+        }
+    }
+
+    pub(in crate::app) fn menu_back(&mut self) {
+        self.menu_screen = match self.menu_screen {
+            MenuScreen::Main => MenuScreen::Main,
+            MenuScreen::Difficulty => MenuScreen::Main,
+            MenuScreen::Chapter => MenuScreen::Difficulty,
+            MenuScreen::Layer => MenuScreen::Chapter,
+        };
+    }
+
+    fn handle_main_menu_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::ArrowUp | KeyCode::KeyW => {
-                self.current_level = self.current_level.saturating_sub(1);
+                self.main_menu_cursor = self.main_menu_cursor.saturating_sub(1);
             }
             KeyCode::ArrowDown | KeyCode::KeyS => {
-                self.current_level = (self.current_level + 1).min(self.levels.len() - 1);
+                self.main_menu_cursor = (self.main_menu_cursor + 1).min(3);
             }
-            KeyCode::Enter | KeyCode::Space => self.open_selected_level(),
+            KeyCode::Enter | KeyCode::Space => match self.main_menu_cursor {
+                0 => self.menu_screen = MenuScreen::Difficulty,
+                1 => self.mode = AppMode::Options,
+                2 => self.mode = AppMode::Changelog,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn handle_difficulty_menu_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::ArrowUp | KeyCode::KeyW => {
+                self.difficulty_cursor = self.difficulty_cursor.saturating_sub(1);
+            }
+            KeyCode::ArrowDown | KeyCode::KeyS => {
+                self.difficulty_cursor = (self.difficulty_cursor + 1).min(Difficulty::COUNT - 1);
+            }
+            KeyCode::Escape | KeyCode::Backspace => self.menu_back(),
+            KeyCode::Enter | KeyCode::Space => self.select_difficulty(self.difficulty_cursor),
+            _ => {}
+        }
+    }
+
+    fn handle_chapter_menu_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::ArrowUp | KeyCode::KeyW => {
+                self.chapter_cursor = self.chapter_cursor.saturating_sub(1);
+            }
+            KeyCode::ArrowDown | KeyCode::KeyS => {
+                self.chapter_cursor = (self.chapter_cursor + 1).min(CHAPTERS.len() - 1);
+            }
+            KeyCode::Escape | KeyCode::Backspace => self.menu_back(),
+            KeyCode::Enter | KeyCode::Space => self.select_chapter(self.chapter_cursor),
+            _ => {}
+        }
+    }
+
+    fn handle_layer_menu_key(&mut self, code: KeyCode) {
+        let count = self.menu_level_count();
+        if count == 0 {
+            if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
+                self.menu_back();
+            }
+            return;
+        }
+
+        match code {
+            KeyCode::ArrowLeft | KeyCode::KeyA => {
+                self.level_cursor = self.level_cursor.saturating_sub(1);
+            }
+            KeyCode::ArrowRight | KeyCode::KeyD => {
+                self.level_cursor = (self.level_cursor + 1).min(count - 1);
+            }
+            KeyCode::ArrowUp | KeyCode::KeyW => {
+                self.level_cursor = self.level_cursor.saturating_sub(4);
+            }
+            KeyCode::ArrowDown | KeyCode::KeyS => {
+                self.level_cursor = (self.level_cursor + 4).min(count - 1);
+            }
+            KeyCode::Escape | KeyCode::Backspace => self.menu_back(),
+            KeyCode::Enter | KeyCode::Space => self.open_selected_layer_item(),
             _ => {}
         }
     }
@@ -62,18 +148,65 @@ impl App {
             return;
         };
         let size = window.inner_size();
-        if let Some(url) = social_hit(self.cursor_screen, size.width as f32, size.height as f32) {
-            open_social_url(url);
-            return;
+        if self.menu_screen == MenuScreen::Main {
+            if let Some(url) = social_hit(self.cursor_screen, size.width as f32, size.height as f32)
+            {
+                open_social_url(url);
+                return;
+            }
         }
 
-        if let Some(index) = menu_hit(self.cursor_screen, size.width as f32, size.height as f32) {
-            match index {
-                0 => self.open_selected_level(),
-                1 => self.mode = AppMode::Options,
-                2 => self.mode = AppMode::Changelog,
-                3 => event_loop.exit(),
-                _ => {}
+        match self.menu_screen {
+            MenuScreen::Main => {
+                if let Some(index) =
+                    menu_hit(self.cursor_screen, size.width as f32, size.height as f32)
+                {
+                    self.main_menu_cursor = index;
+                    match index {
+                        0 => self.menu_screen = MenuScreen::Difficulty,
+                        1 => self.mode = AppMode::Options,
+                        2 => self.mode = AppMode::Changelog,
+                        3 => event_loop.exit(),
+                        _ => {}
+                    }
+                }
+            }
+            MenuScreen::Difficulty => {
+                if let Some(index) =
+                    difficulty_hit(self.cursor_screen, size.width as f32, size.height as f32)
+                {
+                    self.difficulty_cursor = index;
+                    self.select_difficulty(index);
+                }
+            }
+            MenuScreen::Chapter => {
+                if let Some(index) =
+                    chapter_hit(self.cursor_screen, size.width as f32, size.height as f32)
+                {
+                    self.chapter_cursor = index;
+                    self.select_chapter(index);
+                }
+            }
+            MenuScreen::Layer => {
+                let hit = if is_custom_chapter(self.chapter_cursor) {
+                    custom_level_hit(
+                        self.cursor_screen,
+                        size.width as f32,
+                        size.height as f32,
+                        self.menu_level_count(),
+                    )
+                } else {
+                    layer_level_hit(
+                        self.cursor_screen,
+                        size.width as f32,
+                        size.height as f32,
+                        self.chapter_cursor,
+                    )
+                };
+                if let Some(index) = hit {
+                    self.level_cursor = index;
+                    self.open_selected_layer_item();
+                }
             }
         }
     }
@@ -183,6 +316,52 @@ impl App {
     fn open_selected_level(&mut self) {
         self.load_current_level();
         self.mode = AppMode::Playing;
+    }
+
+    fn open_selected_catalog_level(&mut self) {
+        let Some(level_index) = self.selected_catalog_level_index() else {
+            return;
+        };
+
+        self.current_level = level_index;
+        self.open_selected_level();
+    }
+
+    fn open_selected_layer_item(&mut self) {
+        if is_custom_chapter(self.chapter_cursor) && self.level_cursor == 0 {
+            self.create_custom_level();
+        } else {
+            self.open_selected_catalog_level();
+        }
+    }
+
+    fn select_difficulty(&mut self, index: usize) {
+        let Some(difficulty) = Difficulty::from_index(index) else {
+            return;
+        };
+        if !difficulty.available() {
+            return;
+        }
+
+        self.selected_difficulty = difficulty;
+        self.difficulty_cursor = index;
+        self.chapter_cursor = 0;
+        self.level_cursor = 0;
+        self.menu_screen = MenuScreen::Chapter;
+    }
+
+    fn select_chapter(&mut self, index: usize) {
+        let Some(chapter) = CHAPTERS.get(index) else {
+            return;
+        };
+
+        self.chapter_cursor = index;
+        self.level_cursor = 0;
+        if chapter.layers.is_empty() && !is_custom_chapter(index) {
+            return;
+        }
+
+        self.menu_screen = MenuScreen::Layer;
     }
 }
 

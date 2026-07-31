@@ -6,15 +6,21 @@ mod layout;
 use crate::constants::{
     MAX_DASH_CHARGES, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_SHUTDOWN_FLASH_TIME,
 };
+use crate::game::Difficulty;
 use crate::game::level::LevelTriggerKind;
-use crate::game::levels::LevelSpec;
 use crate::game::portal::Color;
+use crate::game::progression::{
+    CHAPTERS, CUSTOM_LEVELS_CHAPTER_INDEX, LayerInfo, MenuLevelInfo, is_custom_chapter,
+};
 use crate::game::{DeathSequence, World};
 use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings, game_key_label, key_code_label};
 
 use super::canvas::{Canvas, Rect};
-use super::{DebugOverlay, EditorInspector, EditorOverlay};
+use super::{
+    DebugOverlay, EditorInspector, EditorObjectMeta, EditorOverlay, LevelMenuOverlay,
+    LevelMenuScreen,
+};
 
 use layout::*;
 
@@ -429,7 +435,16 @@ impl Canvas<'_> {
         }
     }
 
-    pub(super) fn level_menu(&mut self, _levels: &[LevelSpec], _selected: usize) {
+    pub(super) fn level_menu(&mut self, menu: &LevelMenuOverlay) {
+        match menu.screen {
+            LevelMenuScreen::Main => self.main_level_menu(menu),
+            LevelMenuScreen::Difficulty => self.difficulty_menu(menu),
+            LevelMenuScreen::Chapter => self.chapter_menu(menu),
+            LevelMenuScreen::Layer => self.layer_menu(menu),
+        }
+    }
+
+    fn main_level_menu(&mut self, menu: &LevelMenuOverlay) {
         self.menu_background();
 
         let width = self.width as f32;
@@ -468,7 +483,7 @@ impl Canvas<'_> {
 
         let labels = ["PLAY", "OPTIONS", "CHANGELOG", "QUIT"];
         for (index, label) in labels.iter().enumerate() {
-            self.main_menu_button(index, label, index == 0);
+            self.main_menu_button(index, label, index == menu.main_cursor);
         }
 
         self.text(
@@ -478,6 +493,541 @@ impl Canvas<'_> {
             Color::rgb(140, 140, 140),
         );
         self.menu_socials();
+    }
+
+    fn difficulty_menu(&mut self, menu: &LevelMenuOverlay) {
+        self.options_background();
+
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let left = menu_left(width);
+        let title_y = (height * 0.07).clamp(44.0, 82.0);
+        let active_index = menu.difficulty_hover.unwrap_or(menu.difficulty_cursor);
+        let active_difficulty =
+            Difficulty::from_index(active_index).unwrap_or(Difficulty::Standard);
+
+        self.text(
+            Vec2::new(left, title_y),
+            "--DIFFICULTY--",
+            if height < 760.0 { 4 } else { 6 },
+            Color::rgb(245, 245, 245),
+        );
+
+        let mut last_category = "";
+        for (index, difficulty) in Difficulty::ALL.iter().copied().enumerate() {
+            if difficulty.category() != last_category {
+                let (pos, _) = self.difficulty_button_rect(index);
+                self.text(
+                    Vec2::new(pos.x + 6.0, pos.y - 24.0),
+                    difficulty.category(),
+                    2,
+                    Color::rgb(190, 190, 190),
+                );
+                self.draw_line(
+                    Vec2::new(pos.x, pos.y - 8.0),
+                    Vec2::new(pos.x + self.difficulty_button_rect(index).1.x, pos.y - 8.0),
+                    Color::rgb(245, 245, 245),
+                );
+                last_category = difficulty.category();
+            }
+
+            self.difficulty_button(index, difficulty, menu);
+        }
+
+        let desc_y = (height - 72.0).max(560.0_f32.min(height - 92.0));
+        self.text(
+            Vec2::new(left, desc_y - 34.0),
+            active_difficulty.description(),
+            2,
+            if active_difficulty.available() {
+                Color::rgb(245, 245, 245)
+            } else {
+                Color::rgb(120, 120, 120)
+            },
+        );
+        self.text(
+            Vec2::new(left, desc_y),
+            "[ DIFFICULTY CAN BE FURTHER ADJUSTED IN ASSIST OPTIONS MENU ]",
+            1,
+            Color::rgb(160, 160, 160),
+        );
+    }
+
+    fn difficulty_button(&mut self, index: usize, difficulty: Difficulty, menu: &LevelMenuOverlay) {
+        let (pos, size) = self.difficulty_button_rect(index);
+        let selected = index == menu.difficulty_cursor || menu.difficulty_hover == Some(index);
+        let chosen = index == menu.selected_difficulty;
+        let enabled = difficulty.available();
+        let rect = Rect { pos, size };
+        let fill = if selected && enabled {
+            Color::rgb(245, 245, 245)
+        } else if selected {
+            Color::rgb(28, 28, 28)
+        } else {
+            Color::rgb(0, 0, 0)
+        };
+        let edge = if chosen {
+            Color::rgb(255, 182, 18)
+        } else if enabled {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(80, 80, 80)
+        };
+        let text = if selected && enabled {
+            Color::rgb(0, 0, 0)
+        } else if enabled {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(110, 110, 110)
+        };
+        let label_scale = if difficulty == Difficulty::UltrakillMustDie {
+            2
+        } else {
+            3
+        };
+
+        self.beveled_rect_fill(rect, 16.0, fill);
+        self.beveled_rect_outline(rect, 16.0, edge);
+        self.text(
+            pos + Vec2::new(24.0, size.y * 0.5 - 11.0),
+            difficulty.label(),
+            label_scale,
+            text,
+        );
+        if chosen {
+            self.text(
+                pos + Vec2::new(
+                    24.0 + text_pixel_width(difficulty.label(), label_scale) + 16.0,
+                    size.y * 0.5 - 9.0,
+                ),
+                "*",
+                3,
+                Color::rgb(255, 182, 18),
+            );
+        }
+        self.text(
+            pos + Vec2::new(size.x - 118.0, size.y * 0.5 - 10.0),
+            &menu.difficulty_progress[index],
+            3,
+            text,
+        );
+        self.beveled_rect_outline(
+            Rect {
+                pos: pos + Vec2::new(size.x - 58.0, 8.0),
+                size: Vec2::new(42.0, size.y - 16.0),
+            },
+            12.0,
+            edge,
+        );
+    }
+
+    fn chapter_menu(&mut self, menu: &LevelMenuOverlay) {
+        self.options_background();
+
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let title_scale = if height < 760.0 { 4 } else { 5 };
+        let title_y = (height * 0.062).clamp(38.0, 72.0);
+        let difficulty =
+            Difficulty::from_index(menu.selected_difficulty).unwrap_or(Difficulty::Standard);
+
+        self.centered_text(
+            Vec2::new(width * 0.5, title_y),
+            "--CHAPTER--",
+            title_scale,
+            Color::rgb(245, 245, 245),
+        );
+        self.centered_text(
+            Vec2::new(width * 0.5, title_y + 52.0),
+            &format!("-- {} --", difficulty.label()),
+            3,
+            Color::rgb(245, 245, 245),
+        );
+
+        let mut last_section = "";
+        for (index, chapter) in CHAPTERS.iter().enumerate() {
+            if chapter.section != last_section {
+                let (pos, size) = self.chapter_button_rect(index);
+                self.text(
+                    Vec2::new(pos.x, pos.y - 28.0),
+                    chapter.section,
+                    3,
+                    Color::rgb(245, 245, 245),
+                );
+                self.draw_line(
+                    Vec2::new(pos.x, pos.y - 8.0),
+                    Vec2::new(pos.x + size.x, pos.y - 8.0),
+                    Color::rgb(245, 245, 245),
+                );
+                last_section = chapter.section;
+            }
+            self.chapter_button(
+                index,
+                chapter.label,
+                !chapter.layers.is_empty() || is_custom_chapter(index),
+                menu,
+            );
+        }
+    }
+
+    fn chapter_button(
+        &mut self,
+        index: usize,
+        label: &str,
+        enabled: bool,
+        menu: &LevelMenuOverlay,
+    ) {
+        let (pos, size) = self.chapter_button_rect(index);
+        let selected = index == menu.chapter_cursor;
+        let rect = Rect { pos, size };
+        let fill = if selected && enabled {
+            Color::rgb(255, 182, 18)
+        } else if selected {
+            Color::rgb(28, 28, 28)
+        } else {
+            Color::rgb(0, 0, 0)
+        };
+        let text = if selected && enabled {
+            Color::rgb(0, 0, 0)
+        } else if enabled {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(120, 120, 120)
+        };
+        let edge = if enabled {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(80, 80, 80)
+        };
+
+        self.beveled_rect_fill(rect, 16.0, fill);
+        self.beveled_rect_outline(rect, 16.0, edge);
+        self.text(pos + Vec2::new(30.0, size.y * 0.5 - 10.0), label, 2, text);
+        self.beveled_rect_outline(
+            Rect {
+                pos: pos + Vec2::new(size.x - 66.0, 8.0),
+                size: Vec2::new(46.0, size.y - 16.0),
+            },
+            12.0,
+            if selected && enabled {
+                Color::rgb(0, 0, 0)
+            } else {
+                edge
+            },
+        );
+    }
+
+    fn layer_menu(&mut self, menu: &LevelMenuOverlay) {
+        self.options_background();
+
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let chapter = CHAPTERS.get(menu.chapter_cursor).unwrap_or(&CHAPTERS[0]);
+        let difficulty =
+            Difficulty::from_index(menu.selected_difficulty).unwrap_or(Difficulty::Standard);
+
+        self.centered_text(
+            Vec2::new(width * 0.5, (height * 0.047).clamp(34.0, 58.0)),
+            difficulty.label(),
+            3,
+            Color::rgb(245, 245, 245),
+        );
+
+        if menu.chapter_cursor == CUSTOM_LEVELS_CHAPTER_INDEX {
+            self.custom_levels_menu(menu);
+            return;
+        }
+
+        if chapter.layers.is_empty() {
+            self.centered_text(
+                Vec2::new(width * 0.5, height * 0.48),
+                "UNDER CONSTRUCTION",
+                4,
+                Color::rgb(120, 120, 120),
+            );
+            return;
+        }
+
+        let mut cursor = 0;
+        for (layer_index, layer) in chapter.layers.iter().enumerate() {
+            self.layer_row_header(layer_index, layer);
+            for (level_index, level) in layer.levels.iter().enumerate() {
+                let (pos, size) = self.layer_level_rect(layer_index, level_index);
+                let available = menu
+                    .available_level_codes
+                    .iter()
+                    .any(|code| code == level.code);
+                self.layer_level_card(
+                    Rect { pos, size },
+                    level,
+                    available,
+                    cursor == menu.level_cursor,
+                );
+                cursor += 1;
+            }
+        }
+    }
+
+    fn custom_levels_menu(&mut self, menu: &LevelMenuOverlay) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let left = (width * 0.055).clamp(42.0, 96.0);
+        let header_y = (height * 0.17).clamp(96.0, 160.0);
+        let right = width - left;
+
+        self.text(
+            Vec2::new(left, header_y),
+            "CUSTOM LEVELS",
+            if height < 760.0 { 4 } else { 5 },
+            Color::rgb(245, 245, 245),
+        );
+        self.draw_line(
+            Vec2::new(left, header_y + 42.0),
+            Vec2::new(right, header_y + 42.0),
+            Color::rgb(245, 245, 245),
+        );
+
+        self.custom_level_card(
+            self.custom_level_rect(0),
+            "NEW LEVEL",
+            "CREATE .LVL",
+            true,
+            menu.level_cursor == 0,
+        );
+
+        for (index, name) in menu.custom_level_names.iter().enumerate() {
+            self.custom_level_card(
+                self.custom_level_rect(index + 1),
+                name,
+                "LOCAL .LVL",
+                false,
+                menu.level_cursor == index + 1,
+            );
+        }
+    }
+
+    fn custom_level_card(
+        &mut self,
+        rect: Rect,
+        label: &str,
+        subtitle: &str,
+        create: bool,
+        selected: bool,
+    ) {
+        let fill = if selected && create {
+            Color::rgb(107, 221, 144)
+        } else if selected {
+            Color::rgb(28, 32, 36)
+        } else {
+            Color::rgb(8, 8, 8)
+        };
+        let edge = if selected && !create {
+            Color::rgb(255, 182, 18)
+        } else if create {
+            Color::rgb(107, 221, 144)
+        } else {
+            Color::rgb(245, 245, 245)
+        };
+        let text = if selected && create {
+            Color::rgb(0, 0, 0)
+        } else {
+            Color::rgb(245, 245, 245)
+        };
+        let preview = Rect {
+            pos: rect.pos + Vec2::new(18.0, 48.0),
+            size: Vec2::new(rect.size.x - 36.0, rect.size.y * 0.42),
+        };
+
+        self.beveled_rect_fill(rect, 10.0, fill);
+        self.beveled_rect_outline(rect, 10.0, edge);
+        self.text(rect.pos + Vec2::new(18.0, 16.0), label, 2, text);
+        self.fill_rect(
+            preview,
+            if create {
+                Color::rgb(14, 38, 30)
+            } else {
+                Color::rgb(24, 20, 24)
+            },
+        );
+        self.rect_outline(preview, edge);
+        if create {
+            let center = preview.pos + preview.size * 0.5;
+            self.draw_line(
+                center - Vec2::new(28.0, 0.0),
+                center + Vec2::new(28.0, 0.0),
+                Color::rgb(107, 221, 144),
+            );
+            self.draw_line(
+                center - Vec2::new(0.0, 28.0),
+                center + Vec2::new(0.0, 28.0),
+                Color::rgb(107, 221, 144),
+            );
+        } else {
+            self.card_preview_grid(preview, true);
+        }
+        self.text(
+            rect.pos + Vec2::new(18.0, rect.size.y - 28.0),
+            subtitle,
+            1,
+            if selected && create {
+                Color::rgb(0, 0, 0)
+            } else {
+                Color::rgb(160, 160, 160)
+            },
+        );
+    }
+
+    fn layer_row_header(&mut self, layer_index: usize, layer: &LayerInfo) {
+        let (first_pos, _) = self.layer_level_rect(layer_index, 0);
+        let width = self.width as f32;
+        let header_y = first_pos.y - 44.0;
+        let right = width - (width * 0.038).clamp(36.0, 76.0);
+
+        self.text(
+            Vec2::new(first_pos.x, header_y - 6.0),
+            layer.title,
+            5,
+            Color::rgb(245, 245, 245),
+        );
+        self.draw_line(
+            Vec2::new(first_pos.x, header_y + 36.0),
+            Vec2::new(right, header_y + 36.0),
+            Color::rgb(245, 245, 245),
+        );
+
+        if self.width >= 980 {
+            let secret = Rect {
+                pos: Vec2::new(right - 220.0, header_y - 12.0),
+                size: Vec2::new(210.0, 58.0),
+            };
+            self.beveled_rect_fill(secret, 16.0, Color::rgb(245, 245, 245));
+            self.beveled_rect_outline(secret, 16.0, Color::rgb(245, 245, 245));
+            self.centered_text(
+                secret.pos + secret.size * 0.5 - Vec2::new(0.0, 8.0),
+                "SECRET MISSION",
+                2,
+                Color::rgb(0, 0, 0),
+            );
+        }
+    }
+
+    fn layer_level_card(
+        &mut self,
+        rect: Rect,
+        level: &MenuLevelInfo,
+        available: bool,
+        selected: bool,
+    ) {
+        let fill = if selected && available {
+            Color::rgb(28, 32, 36)
+        } else {
+            Color::rgb(8, 8, 8)
+        };
+        let edge = if selected && available {
+            Color::rgb(255, 182, 18)
+        } else if available {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(70, 70, 70)
+        };
+        let text = if available {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(105, 105, 105)
+        };
+        let preview = Rect {
+            pos: rect.pos + Vec2::new(18.0, 42.0),
+            size: Vec2::new(rect.size.x - 36.0, rect.size.y * 0.46),
+        };
+        let complete = Rect {
+            pos: rect.pos + Vec2::new(18.0, rect.size.y - 36.0),
+            size: Vec2::new((rect.size.x - 72.0).max(80.0), 24.0),
+        };
+        let rank = Rect {
+            pos: rect.pos + Vec2::new(rect.size.x - 48.0, rect.size.y - 44.0),
+            size: Vec2::new(34.0, 34.0),
+        };
+
+        self.beveled_rect_fill(rect, 8.0, fill);
+        self.beveled_rect_outline(rect, 8.0, edge);
+        self.text(
+            rect.pos + Vec2::new(14.0, 14.0),
+            &format!("{}: {}", level.code, level.title),
+            1,
+            text,
+        );
+        self.fill_rect(
+            preview,
+            if available {
+                Color::rgb(32, 20, 16)
+            } else {
+                Color::rgb(14, 14, 14)
+            },
+        );
+        self.rect_outline(preview, edge);
+        self.card_preview_grid(preview, available);
+
+        self.beveled_rect_fill(
+            complete,
+            8.0,
+            if available {
+                Color::rgb(245, 245, 245)
+            } else {
+                Color::rgb(28, 28, 28)
+            },
+        );
+        self.centered_text(
+            complete.pos + complete.size * 0.5 - Vec2::new(0.0, 5.0),
+            if available { "AVAILABLE" } else { "NO .LVL" },
+            1,
+            if available {
+                Color::rgb(0, 0, 0)
+            } else {
+                Color::rgb(110, 110, 110)
+            },
+        );
+        self.beveled_rect_outline(rank, 8.0, edge);
+    }
+
+    fn card_preview_grid(&mut self, rect: Rect, available: bool) {
+        let color = if available {
+            Color::rgb(120, 48, 34)
+        } else {
+            Color::rgb(42, 42, 42)
+        };
+        let bright = if available {
+            Color::rgb(255, 182, 18)
+        } else {
+            Color::rgb(70, 70, 70)
+        };
+        let step = 16.0;
+        let mut x = rect.pos.x + step;
+        while x < rect.pos.x + rect.size.x {
+            self.draw_line(
+                Vec2::new(x, rect.pos.y),
+                Vec2::new(x, rect.pos.y + rect.size.y),
+                color,
+            );
+            x += step;
+        }
+        let mut y = rect.pos.y + step;
+        while y < rect.pos.y + rect.size.y {
+            self.draw_line(
+                Vec2::new(rect.pos.x, y),
+                Vec2::new(rect.pos.x + rect.size.x, y),
+                color,
+            );
+            y += step;
+        }
+        if available {
+            self.fill_rect(
+                Rect {
+                    pos: rect.pos + Vec2::new(18.0, rect.size.y - 24.0),
+                    size: Vec2::new(rect.size.x - 36.0, 8.0),
+                },
+                bright,
+            );
+        }
     }
 
     pub(super) fn changelog_menu(&mut self) {
@@ -769,7 +1319,7 @@ impl Canvas<'_> {
                 continue;
             }
 
-            let solid = enemy.solid();
+            let solid = enemy.spawn_solid();
 
             self.solid_outline(solid, Color::rgb(255, 88, 76));
             if overlay.selection_count == 1 {
@@ -886,16 +1436,15 @@ impl Canvas<'_> {
     }
 
     fn editor_panel(&mut self, overlay: &EditorOverlay) {
-        self.editor_status(overlay);
+        self.editor_top_toolbar(overlay);
         self.editor_dock(overlay);
-        self.editor_inspector_button(overlay);
 
         if overlay.inspector_open {
             self.editor_inspector_panel(overlay);
         }
     }
 
-    fn editor_status(&mut self, overlay: &EditorOverlay) {
+    fn editor_top_toolbar(&mut self, overlay: &EditorOverlay) {
         let label = if overlay.dirty {
             "EDITOR UNSAVED"
         } else if overlay.saved_flash {
@@ -903,73 +1452,135 @@ impl Canvas<'_> {
         } else {
             "EDITOR"
         };
-        let color = if overlay.saved_flash {
+        let status_color = if overlay.saved_flash {
             Color::rgb(107, 221, 144)
         } else {
             Color::rgb(245, 247, 250)
         };
+        let top_labels = ["UNDO", "DEL", "SPECIAL", "SAVE"];
 
-        self.text(Vec2::new(18.0, 68.0), label, 2, color);
-        self.text(
-            Vec2::new(18.0, 94.0),
+        for (index, label) in top_labels.iter().enumerate() {
+            let (pos, size) = editor_top_button_rect(index, self.width as f32);
+            let active = match index {
+                2 => overlay.inspector_open,
+                3 => overlay.saved_flash,
+                _ => false,
+            };
+
+            self.editor_square_button(Rect { pos, size }, label, active);
+        }
+
+        let width = self.width as f32;
+        let bar = Rect {
+            pos: Vec2::new((width - 430.0).max(190.0) * 0.5, 24.0),
+            size: Vec2::new(430.0_f32.min(width - 380.0).max(260.0), 38.0),
+        };
+
+        self.fill_rect(bar, Color::rgb(5, 7, 10));
+        self.beveled_rect_outline(bar, 13.0, Color::rgb(92, 105, 125));
+        self.centered_text(
+            bar.pos + Vec2::new(bar.size.x * 0.5, 7.0),
             &format!(
-                "LMB PLACE {} / RMB SELECT / {}",
-                overlay.active_tool_label,
+                "{} / {} / {} / {}",
+                label,
+                overlay.active_category_label,
+                overlay.editor_mode_label,
                 grid_mode_text(overlay.grid_snap)
             ),
             1,
-            Color::rgb(180, 190, 205),
+            status_color,
         );
     }
 
     fn editor_dock(&mut self, overlay: &EditorOverlay) {
         let width = self.width as f32;
         let height = self.height as f32;
-        let gap = 6.0;
-        let tool_count = 11.0;
-        let max_item_w = ((width - gap * (tool_count - 1.0) - 48.0) / tool_count).max(46.0);
-        let item_size = Vec2::new((width * 0.064).clamp(54.0, 94.0).min(max_item_w), 58.0);
-        let dock_w = item_size.x * tool_count + gap * (tool_count - 1.0);
-        let dock_pos = Vec2::new((width - dock_w) * 0.5, height - item_size.y - 18.0);
+        let (panel_pos, panel_size) = editor_bottom_panel_rect(width, height);
         let bg = Rect {
-            pos: dock_pos - Vec2::new(12.0, 30.0),
-            size: Vec2::new(dock_w + 24.0, item_size.y + 40.0),
+            pos: panel_pos,
+            size: panel_size,
         };
 
         self.fill_rect(bg, Color::rgb(5, 7, 10));
-        self.beveled_rect_outline(bg, 14.0, Color::rgb(92, 105, 125));
-        self.editor_dock_categories(dock_pos, item_size, gap);
+        self.beveled_rect_outline(bg, 15.0, Color::rgb(92, 105, 125));
+        self.editor_mode_buttons(overlay);
+        self.editor_palette_tabs(overlay);
 
-        for index in 0..11 {
-            let tool_index = index + 1;
-            let pos = dock_pos + Vec2::new(index as f32 * (item_size.x + gap), 0.0);
-            let active = overlay.active_tool == tool_index;
-            self.editor_dock_item(pos, item_size, tool_index, active);
+        let slots = editor_palette_slots(overlay.active_category);
+        for (index, slot) in slots.iter().copied().enumerate() {
+            let (pos, item_size) = editor_tool_rect(index, slots.len(), width, height);
+            match slot.tool_index {
+                Some(tool_index) => {
+                    let active = overlay.active_tool == tool_index;
+                    self.editor_dock_item(pos, item_size, tool_index, active);
+                }
+                None => self.editor_dock_dummy(pos, item_size, slot.label),
+            }
+        }
+
+        self.editor_layer_control(overlay);
+        self.editor_quick_buttons(overlay);
+    }
+
+    fn editor_mode_buttons(&mut self, overlay: &EditorOverlay) {
+        for (index, label) in ["BUILD", "EDIT", "DELETE"].iter().enumerate() {
+            let (pos, size) = editor_mode_button_rect(index, self.width as f32, self.height as f32);
+            let active = overlay.editor_mode == index;
+            let rect = Rect { pos, size };
+            let fill = if active {
+                match index {
+                    0 => Color::rgb(107, 221, 144),
+                    1 => Color::rgb(80, 190, 255),
+                    _ => Color::rgb(255, 88, 76),
+                }
+            } else {
+                Color::rgb(10, 12, 16)
+            };
+            let text = if active {
+                Color::rgb(0, 0, 0)
+            } else {
+                Color::rgb(245, 247, 250)
+            };
+
+            self.beveled_rect_fill(rect, 12.0, fill);
+            self.beveled_rect_outline(rect, 12.0, Color::rgb(245, 247, 250));
+            self.centered_text(
+                pos + Vec2::new(size.x * 0.5, size.y * 0.5 - 7.0),
+                label,
+                2,
+                text,
+            );
         }
     }
 
-    fn editor_dock_categories(&mut self, dock_pos: Vec2, item_size: Vec2, gap: f32) {
-        for (label, start, count) in [
-            ("BUILD", 0, 3),
-            ("UTILITY", 3, 4),
-            ("ENEMY", 7, 1),
-            ("TRIGGERS", 8, 3),
-        ] {
-            let x0 = dock_pos.x + start as f32 * (item_size.x + gap);
-            let width = item_size.x * count as f32 + gap * (count - 1) as f32;
+    fn editor_palette_tabs(&mut self, overlay: &EditorOverlay) {
+        let labels = ["BUILDING", "UTILITY", "ENEMY", "TRIGGERS", "DECO"];
 
-            self.centered_text(
-                Vec2::new(x0 + width * 0.5, dock_pos.y - 22.0),
-                label,
-                1,
-                Color::rgb(180, 190, 205),
-            );
+        for (index, label) in labels.iter().enumerate() {
+            let (pos, size) =
+                editor_category_tab_rect(index, self.width as f32, self.height as f32);
+            let active = overlay.active_category == index;
+            let rect = Rect { pos, size };
+            let fill = if active {
+                Color::rgb(92, 105, 125)
+            } else {
+                Color::rgb(10, 12, 16)
+            };
+            let text = if active {
+                Color::rgb(245, 247, 250)
+            } else {
+                Color::rgb(180, 190, 205)
+            };
+
+            self.beveled_rect_fill(rect, 8.0, fill);
+            self.beveled_rect_outline(rect, 8.0, Color::rgb(92, 105, 125));
+            self.centered_text(rect.pos + Vec2::new(rect.size.x * 0.5, 6.0), label, 1, text);
         }
     }
 
     fn editor_dock_item(&mut self, pos: Vec2, size: Vec2, tool_index: usize, active: bool) {
         let fill = if active {
-            Color::rgb(245, 245, 245)
+            Color::rgb(215, 245, 220)
         } else {
             Color::rgb(10, 12, 16)
         };
@@ -980,10 +1591,111 @@ impl Canvas<'_> {
         };
         let label = editor_tool_label(tool_index);
 
-        self.beveled_rect_fill(Rect { pos, size }, 12.0, fill);
-        self.beveled_rect_outline(Rect { pos, size }, 12.0, Color::rgb(245, 247, 250));
-        self.editor_tool_icon(pos + Vec2::new(size.x * 0.5, 18.0), tool_index, text);
-        self.centered_text(pos + Vec2::new(size.x * 0.5, size.y - 18.0), label, 1, text);
+        self.beveled_rect_fill(Rect { pos, size }, 8.0, fill);
+        self.beveled_rect_outline(
+            Rect { pos, size },
+            8.0,
+            if active {
+                Color::rgb(107, 221, 144)
+            } else {
+                Color::rgb(245, 247, 250)
+            },
+        );
+        self.editor_tool_icon(pos + Vec2::new(size.x * 0.5, 16.0), tool_index, text);
+        self.centered_text(pos + Vec2::new(size.x * 0.5, size.y - 15.0), label, 1, text);
+    }
+
+    fn editor_dock_dummy(&mut self, pos: Vec2, size: Vec2, label: &str) {
+        let color = Color::rgb(105, 115, 130);
+
+        self.beveled_rect_fill(Rect { pos, size }, 8.0, Color::rgb(8, 10, 14));
+        self.beveled_rect_outline(Rect { pos, size }, 8.0, color);
+        self.draw_line(
+            pos + Vec2::new(16.0, 16.0),
+            pos + Vec2::new(size.x - 16.0, size.y - 22.0),
+            color,
+        );
+        self.draw_line(
+            pos + Vec2::new(size.x - 16.0, 16.0),
+            pos + Vec2::new(16.0, size.y - 22.0),
+            color,
+        );
+        self.centered_text(
+            pos + Vec2::new(size.x * 0.5, size.y - 15.0),
+            label,
+            1,
+            color,
+        );
+    }
+
+    fn editor_layer_control(&mut self, overlay: &EditorOverlay) {
+        let (pos, size) = editor_layer_control_rect(self.width as f32, self.height as f32);
+        let rect = Rect { pos, size };
+        let button_size = Vec2::new(36.0, 36.0);
+        let left = Rect {
+            pos: pos + Vec2::new(8.0, (size.y - button_size.y) * 0.5),
+            size: button_size,
+        };
+        let right = Rect {
+            pos: pos + Vec2::new(size.x - button_size.x - 8.0, (size.y - button_size.y) * 0.5),
+            size: button_size,
+        };
+        let value = Rect {
+            pos: Vec2::new(left.pos.x + left.size.x + 6.0, pos.y + 4.0),
+            size: Vec2::new(size.x - button_size.x * 2.0 - 28.0, 36.0),
+        };
+
+        self.beveled_rect_fill(rect, 10.0, Color::rgb(5, 7, 10));
+        self.beveled_rect_outline(rect, 10.0, Color::rgb(92, 105, 125));
+        self.editor_small_button(left, "<");
+        self.beveled_rect_outline(value, 9.0, Color::rgb(245, 247, 250));
+        self.centered_text(
+            value.pos + value.size * 0.5 - Vec2::new(0.0, 7.0),
+            &format!("L{}", overlay.active_layer),
+            2,
+            Color::rgb(245, 247, 250),
+        );
+        self.editor_small_button(right, ">");
+    }
+
+    fn editor_quick_buttons(&mut self, overlay: &EditorOverlay) {
+        for (index, (label, active)) in [
+            ("ROTATE", overlay.rotate_ui),
+            ("SNAP", overlay.grid_snap),
+            ("SPECIAL", overlay.inspector_open),
+            ("SAVE", overlay.saved_flash),
+        ]
+        .iter()
+        .copied()
+        .enumerate()
+        {
+            let (pos, size) =
+                editor_quick_button_rect(index, self.width as f32, self.height as f32);
+
+            self.editor_square_button(Rect { pos, size }, label, active);
+        }
+    }
+
+    fn editor_square_button(&mut self, rect: Rect, label: &str, active: bool) {
+        let fill = if active {
+            Color::rgb(107, 221, 144)
+        } else {
+            Color::rgb(10, 12, 16)
+        };
+        let text = if active {
+            Color::rgb(0, 0, 0)
+        } else {
+            Color::rgb(245, 247, 250)
+        };
+
+        self.beveled_rect_fill(rect, 12.0, fill);
+        self.beveled_rect_outline(rect, 12.0, Color::rgb(245, 247, 250));
+        self.centered_text(
+            rect.pos + Vec2::new(rect.size.x * 0.5, rect.size.y * 0.5 - 7.0),
+            label,
+            1,
+            text,
+        );
     }
 
     fn editor_tool_icon(&mut self, center: Vec2, tool_index: usize, color: Color) {
@@ -1150,34 +1862,8 @@ impl Canvas<'_> {
         }
     }
 
-    fn editor_inspector_button(&mut self, overlay: &EditorOverlay) {
-        let size = Vec2::new(54.0, 54.0);
-        let pos = Vec2::new(
-            self.width as f32 - size.x - 22.0,
-            self.height as f32 * 0.5 - size.y * 0.5,
-        );
-        let fill = if overlay.inspector_open {
-            Color::rgb(245, 245, 245)
-        } else {
-            Color::rgb(10, 12, 16)
-        };
-        let text = if overlay.inspector_open {
-            Color::rgb(0, 0, 0)
-        } else {
-            Color::rgb(245, 247, 250)
-        };
-
-        self.beveled_rect_fill(Rect { pos, size }, 12.0, fill);
-        self.beveled_rect_outline(Rect { pos, size }, 12.0, Color::rgb(245, 247, 250));
-        self.text(pos + Vec2::new(19.0, 17.0), ">", 2, text);
-    }
-
     fn editor_inspector_panel(&mut self, overlay: &EditorOverlay) {
-        let size = Vec2::new((self.width as f32 * 0.24).clamp(300.0, 360.0), 472.0);
-        let pos = Vec2::new(
-            self.width as f32 - size.x - 92.0,
-            self.height as f32 * 0.5 - size.y * 0.5,
-        );
+        let (pos, size) = editor_inspector_layout(self.width as f32, self.height as f32);
         let panel = Rect { pos, size };
         let subject = if overlay.selection_kind == "NONE" {
             overlay.active_tool_label
@@ -1246,50 +1932,50 @@ impl Canvas<'_> {
             }
             EditorInspector::WorldPortal(portal) => {
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 82.0),
+                    pos + Vec2::new(18.0, 74.0),
                     size.x - 36.0,
                     "ID",
                     &portal.id.to_string(),
                 );
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 130.0),
+                    pos + Vec2::new(18.0, 116.0),
                     size.x - 36.0,
                     "RECEIVER",
                     &portal.receiver_id.to_string(),
                 );
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 178.0),
+                    pos + Vec2::new(18.0, 158.0),
                     size.x - 36.0,
                     "PRIORITY",
                     &portal.priority.to_string(),
                 );
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 226.0),
+                    pos + Vec2::new(18.0, 200.0),
                     size.x - 36.0,
                     "SCALE",
                     &format!("{:.1}", portal.scale),
                 );
                 self.editor_toggle_row(
-                    pos + Vec2::new(18.0, 274.0),
+                    pos + Vec2::new(18.0, 242.0),
                     size.x - 36.0,
                     "SEAMLESS",
                     if portal.seamless { "ON" } else { "OFF" },
                     portal.seamless,
                 );
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 322.0),
+                    pos + Vec2::new(18.0, 284.0),
                     size.x - 36.0,
                     "AREA",
                     &format!("{:.0}", portal.seamless_depth),
                 );
                 self.editor_stepper_row(
-                    pos + Vec2::new(18.0, 370.0),
+                    pos + Vec2::new(18.0, 326.0),
                     size.x - 36.0,
                     "ANGLE",
                     &format!("{:.0}", portal.seamless_angle),
                 );
                 self.editor_toggle_row(
-                    pos + Vec2::new(18.0, 418.0),
+                    pos + Vec2::new(18.0, 368.0),
                     size.x - 36.0,
                     "WALLS",
                     if portal.seamless_rely_on_walls {
@@ -1301,14 +1987,31 @@ impl Canvas<'_> {
                 );
             }
             EditorInspector::None => {
-                self.text(
-                    pos + Vec2::new(18.0, 88.0),
-                    "SELECT DOOR OR PORTAL",
-                    1,
-                    Color::rgb(105, 115, 130),
-                );
+                if overlay.selection_kind == "NONE" {
+                    self.text(
+                        pos + Vec2::new(18.0, 88.0),
+                        "SELECT OBJECT",
+                        1,
+                        Color::rgb(105, 115, 130),
+                    );
+                }
             }
         }
+
+        if let Some(meta) = overlay.object_meta {
+            let y = editor_common_meta_y(overlay.selection_kind);
+            self.editor_object_meta_rows(pos + Vec2::new(18.0, y), size.x - 36.0, meta);
+        }
+    }
+
+    fn editor_object_meta_rows(&mut self, pos: Vec2, width: f32, meta: EditorObjectMeta) {
+        self.editor_stepper_row(pos, width, "OBJECT ID", &meta.id.to_string());
+        self.editor_stepper_row(
+            pos + Vec2::new(0.0, 52.0),
+            width,
+            "LAYER",
+            &meta.layer.to_string(),
+        );
     }
 
     fn editor_toggle_row(&mut self, pos: Vec2, width: f32, label: &str, value: &str, on: bool) {
@@ -1897,6 +2600,90 @@ impl Canvas<'_> {
         (pos, size)
     }
 
+    fn difficulty_button_rect(&self, index: usize) -> (Vec2, Vec2) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let size = Vec2::new(
+            (width * 0.31).clamp(360.0, 580.0),
+            (height * 0.058).clamp(46.0, 64.0),
+        );
+        let gap = (height * 0.012).clamp(8.0, 14.0);
+        let group_gap = (height * 0.07).clamp(52.0, 84.0);
+        let top = (height * 0.185).clamp(104.0, 178.0);
+        let group_offset = if index >= 4 {
+            group_gap * 2.0
+        } else if index >= 2 {
+            group_gap
+        } else {
+            0.0
+        };
+        let pos = Vec2::new(
+            menu_left(width),
+            top + index as f32 * (size.y + gap) + group_offset,
+        );
+
+        (pos, size)
+    }
+
+    fn chapter_button_rect(&self, index: usize) -> (Vec2, Vec2) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let size = Vec2::new(
+            (width * 0.35).clamp(430.0, 650.0),
+            (height * 0.058).clamp(48.0, 64.0),
+        );
+        let top = (height * 0.26).clamp(154.0, 260.0);
+        let gap = (height * 0.017).clamp(10.0, 18.0);
+        let section_gap = (height * 0.048).clamp(36.0, 54.0);
+        let extra = if index >= 4 { section_gap } else { 0.0 };
+        let pos = Vec2::new(
+            (width - size.x) * 0.5,
+            top + index as f32 * (size.y + gap) + extra,
+        );
+
+        (pos, size)
+    }
+
+    fn layer_level_rect(&self, layer_index: usize, level_index: usize) -> (Vec2, Vec2) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let margin = (width * 0.038).clamp(36.0, 76.0);
+        let gap = (width * 0.035).clamp(30.0, 66.0);
+        let columns = 4.0;
+        let size = Vec2::new(
+            ((width - margin * 2.0 - gap * (columns - 1.0)) / columns).clamp(190.0, 330.0),
+            (height * 0.145).clamp(98.0, 158.0),
+        );
+        let row_step = (height * 0.28).clamp(182.0, 272.0);
+        let top = (height * 0.26).clamp(150.0, 242.0);
+        let pos = Vec2::new(
+            margin + level_index as f32 * (size.x + gap),
+            top + layer_index as f32 * row_step,
+        );
+
+        (pos, size)
+    }
+
+    fn custom_level_rect(&self, index: usize) -> Rect {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let columns = if width < 920.0 { 2 } else { 4 };
+        let columns_f = columns as f32;
+        let margin = (width * 0.055).clamp(42.0, 96.0);
+        let gap = (width * 0.028).clamp(24.0, 54.0);
+        let card_w =
+            ((width - margin * 2.0 - gap * (columns_f - 1.0)) / columns_f).clamp(210.0, 360.0);
+        let card_h = (height * 0.15).clamp(104.0, 160.0);
+        let col = (index % columns) as f32;
+        let row = (index / columns) as f32;
+        let top = (height * 0.26).clamp(148.0, 238.0);
+
+        Rect {
+            pos: Vec2::new(margin + col * (card_w + gap), top + row * (card_h + 36.0)),
+            size: Vec2::new(card_w, card_h),
+        }
+    }
+
     fn beveled_rect_outline(&mut self, rect: Rect, bevel: f32, color: Color) {
         let p = rect.pos;
         let s = rect.size;
@@ -2126,4 +2913,302 @@ fn trigger_color(kind: LevelTriggerKind) -> Color {
         LevelTriggerKind::LevelEnd => Color::rgb(255, 224, 102),
         LevelTriggerKind::EnemySpawn { .. } => Color::rgb(255, 88, 76),
     }
+}
+
+fn editor_inspector_layout(width: f32, height: f32) -> (Vec2, Vec2) {
+    let size = Vec2::new((width * 0.24).clamp(300.0, 360.0), 520.0);
+    let ideal_y = height * 0.5 - size.y * 0.5;
+    let min_y = 84.0;
+    let max_y = (height - size.y - 18.0).max(min_y);
+
+    (
+        Vec2::new(width - size.x - 22.0, ideal_y.clamp(min_y, max_y)),
+        size,
+    )
+}
+
+fn editor_bottom_panel_rect(width: f32, height: f32) -> (Vec2, Vec2) {
+    let panel_h = (height * 0.24).clamp(154.0, 186.0);
+    let margin = 12.0;
+
+    (
+        Vec2::new(margin, height - panel_h - 10.0),
+        Vec2::new((width - margin * 2.0).max(320.0), panel_h),
+    )
+}
+
+fn editor_mode_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let (panel_pos, panel_size) = editor_bottom_panel_rect(width, height);
+    let gap = 9.0;
+    let size = Vec2::new(
+        (width * 0.125).clamp(118.0, 158.0),
+        ((panel_size.y - 32.0 - gap * 2.0) / 3.0).clamp(34.0, 44.0),
+    );
+
+    (
+        panel_pos + Vec2::new(14.0, 16.0 + index as f32 * (size.y + gap)),
+        size,
+    )
+}
+
+fn editor_quick_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let (panel_pos, panel_size) = editor_bottom_panel_rect(width, height);
+    let gap = 10.0;
+    let size = Vec2::new(78.0, ((panel_size.y - 34.0 - gap) / 2.0).clamp(48.0, 62.0));
+    let col = index % 2;
+    let row = index / 2;
+    let x = panel_pos.x + panel_size.x - 14.0 - size.x * 2.0 - gap;
+    let y = panel_pos.y + 18.0;
+
+    (
+        Vec2::new(
+            x + col as f32 * (size.x + gap),
+            y + row as f32 * (size.y + gap),
+        ),
+        size,
+    )
+}
+
+fn editor_tool_rect(index: usize, slot_count: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let (palette_pos, palette_size, gap, columns) =
+        editor_palette_layout(width, height, slot_count);
+    let row = index / columns;
+    let col = index % columns;
+    let rows = slot_count.max(1).div_ceil(columns);
+    let item_w = ((palette_size.x - gap * (columns - 1) as f32) / columns as f32).clamp(48.0, 62.0);
+    let item_h = ((palette_size.y - gap * (rows - 1) as f32) / rows as f32).clamp(48.0, 54.0);
+    let used_w = item_w * columns as f32 + gap * (columns - 1) as f32;
+    let used_h = item_h * rows as f32 + gap * (rows - 1) as f32;
+    let start = palette_pos
+        + Vec2::new(
+            (palette_size.x - used_w) * 0.5,
+            (palette_size.y - used_h) * 0.5,
+        );
+
+    (
+        start + Vec2::new(col as f32 * (item_w + gap), row as f32 * (item_h + gap)),
+        Vec2::new(item_w, item_h),
+    )
+}
+
+fn editor_palette_layout(width: f32, height: f32, slot_count: usize) -> (Vec2, Vec2, f32, usize) {
+    let (panel_pos, panel_size) = editor_bottom_panel_rect(width, height);
+    let mode_w = (width * 0.125).clamp(118.0, 158.0);
+    let quick_w = 78.0 * 2.0 + 10.0;
+    let layer_w = 146.0;
+    let palette_left = panel_pos.x + 14.0 + mode_w + 26.0;
+    let palette_right = panel_pos.x + panel_size.x - 14.0 - quick_w - layer_w - 44.0;
+    let palette_w = (palette_right - palette_left).max(220.0);
+    let slot_count = slot_count.max(1);
+    let columns = if palette_w >= 740.0 {
+        slot_count
+    } else {
+        slot_count.min(6)
+    };
+
+    (
+        Vec2::new(palette_left, panel_pos.y + 52.0),
+        Vec2::new(palette_w, panel_size.y - 68.0),
+        8.0,
+        columns,
+    )
+}
+
+fn editor_category_tab_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let (palette_pos, palette_size, _, _) = editor_palette_layout(width, height, 6);
+    let gap = 8.0;
+    let count = 5;
+    let tab_w = (palette_size.x - gap * (count - 1) as f32) / count as f32;
+
+    (
+        Vec2::new(
+            palette_pos.x + index as f32 * (tab_w + gap),
+            palette_pos.y - 34.0,
+        ),
+        Vec2::new(tab_w, 24.0),
+    )
+}
+
+fn editor_layer_control_rect(width: f32, height: f32) -> (Vec2, Vec2) {
+    let (panel_pos, panel_size) = editor_bottom_panel_rect(width, height);
+    let (quick_pos, _) = editor_quick_button_rect(0, width, height);
+    let size = Vec2::new(136.0, 44.0);
+
+    (
+        Vec2::new(
+            quick_pos.x - 18.0 - size.x,
+            panel_pos.y + panel_size.y * 0.5 - size.y * 0.5,
+        ),
+        size,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct EditorPaletteSlot {
+    tool_index: Option<usize>,
+    label: &'static str,
+}
+
+fn editor_palette_slots(category_index: usize) -> &'static [EditorPaletteSlot] {
+    match category_index {
+        0 => &[
+            EditorPaletteSlot {
+                tool_index: Some(1),
+                label: "P SURF",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(2),
+                label: "SURFACE",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(3),
+                label: "ACID",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "SLOPE",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "GLASS",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "ONEWAY",
+            },
+        ],
+        1 => &[
+            EditorPaletteSlot {
+                tool_index: Some(4),
+                label: "DOOR",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(5),
+                label: "CHECK",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(6),
+                label: "W PORT",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(7),
+                label: "TEXT",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "LOCK",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "PATH",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "CAM",
+            },
+        ],
+        2 => &[
+            EditorPaletteSlot {
+                tool_index: Some(8),
+                label: "FILTH",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "HUSK",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "DRONE",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "TURRET",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "BOSS",
+            },
+        ],
+        3 => &[
+            EditorPaletteSlot {
+                tool_index: Some(9),
+                label: "START",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(10),
+                label: "END",
+            },
+            EditorPaletteSlot {
+                tool_index: Some(11),
+                label: "SPAWN",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "DOOR TR",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "MUSIC",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "DIALOG",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "CAMERA",
+            },
+        ],
+        _ => &[
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "LIGHT",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "SIGN",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "PIPES",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "BG",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "FX",
+            },
+            EditorPaletteSlot {
+                tool_index: None,
+                label: "TRIM",
+            },
+        ],
+    }
+}
+
+fn editor_common_meta_y(selection_kind: &str) -> f32 {
+    match selection_kind {
+        "DOOR" => 244.0,
+        "FILTH" => 192.0,
+        "TRIGGER" => 140.0,
+        "WORLD PORTAL" => 410.0,
+        _ => 88.0,
+    }
+}
+
+fn editor_top_button_rect(index: usize, width: f32) -> (Vec2, Vec2) {
+    let size = Vec2::splat(54.0);
+    let gap = 12.0;
+    let y = 16.0;
+    let x = match index {
+        0 => 18.0,
+        1 => 18.0 + size.x + gap,
+        2 => width - 18.0 - size.x * 2.0 - gap,
+        3 => width - 18.0 - size.x,
+        _ => 0.0,
+    };
+
+    (Vec2::new(x, y), size)
 }

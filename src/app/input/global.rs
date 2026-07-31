@@ -38,7 +38,10 @@ impl App {
                 self.mode = AppMode::LevelMenu;
                 true
             }
-            KeyCode::Escape if self.mode == AppMode::LevelMenu => true,
+            KeyCode::Escape if self.mode == AppMode::LevelMenu => {
+                self.menu_back();
+                true
+            }
             KeyCode::Escape if self.mode != AppMode::Playing => {
                 self.mode = AppMode::Playing;
                 self.camera.reset_zoom();

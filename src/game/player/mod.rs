@@ -32,6 +32,7 @@ pub struct Player {
     pub aim_pos: Vec2,
     pub on_ground: bool,
     pub dash_charges: f32,
+    pub max_health: f32,
     pub health: f32,
     movement_state: MovementState,
     dash_dir: Vec2,
@@ -47,7 +48,12 @@ pub struct Player {
 
 impl Player {
     pub fn new(x: f32, y: f32) -> Self {
+        Self::new_with_max_health(x, y, PLAYER_MAX_HEALTH)
+    }
+
+    pub fn new_with_max_health(x: f32, y: f32, max_health: f32) -> Self {
         let pos = Vec2::new(x, y);
+        let max_health = max_health.max(1.0);
 
         Self {
             pos,
@@ -58,7 +64,8 @@ impl Player {
             on_ground: false,
             movement_state: MovementState::Normal,
             dash_charges: MAX_DASH_CHARGES,
-            health: PLAYER_MAX_HEALTH,
+            max_health,
+            health: max_health,
             dash_dir: Vec2::X,
             facing: 1.0,
             air_slide_wall_speed: 0.0,
@@ -218,7 +225,7 @@ impl Player {
     }
 
     pub fn health_percent(&self) -> f32 {
-        (self.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0)
+        (self.health / self.max_health).clamp(0.0, 1.0)
     }
 
     pub fn damage(&mut self, amount: f32) -> bool {

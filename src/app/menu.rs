@@ -1,6 +1,13 @@
 use glam::Vec2;
 
+use crate::game::Difficulty;
+use crate::game::progression::{
+    CHAPTERS, chapter_level, chapter_level_count, custom_level_indices, find_level_by_code,
+    is_custom_chapter, level_code,
+};
 use crate::settings::{GAME_ACTIONS, OptionsClick, OptionsTab, Settings, VolumeKind};
+
+use super::App;
 
 pub(super) const SOCIAL_LINKS: [(&str, &str, &str); 3] = [
     ("X", "@LEXAWHATT", "https://x.com/LexaWhatt"),
@@ -16,6 +23,53 @@ pub(super) fn menu_hit(pos: Vec2, width: f32, height: f32) -> Option<usize> {
             && pos.x <= button_pos.x + button_size.x
             && pos.y >= button_pos.y
             && pos.y <= button_pos.y + button_size.y
+    })
+}
+
+pub(super) fn difficulty_hit(pos: Vec2, width: f32, height: f32) -> Option<usize> {
+    (0..Difficulty::COUNT).position(|index| {
+        let (button_pos, button_size) = difficulty_button_rect(index, width, height);
+        rect_hit(pos, button_pos, button_size)
+    })
+}
+
+pub(super) fn chapter_hit(pos: Vec2, width: f32, height: f32) -> Option<usize> {
+    (0..CHAPTERS.len()).position(|index| {
+        let (button_pos, button_size) = chapter_button_rect(index, width, height);
+        rect_hit(pos, button_pos, button_size)
+    })
+}
+
+pub(super) fn layer_level_hit(
+    pos: Vec2,
+    width: f32,
+    height: f32,
+    chapter_index: usize,
+) -> Option<usize> {
+    let mut cursor = 0;
+    for (layer_index, layer) in CHAPTERS.get(chapter_index)?.layers.iter().enumerate() {
+        for level_index in 0..layer.levels.len() {
+            let (button_pos, button_size) =
+                layer_level_rect(layer_index, level_index, width, height);
+            if rect_hit(pos, button_pos, button_size) {
+                return Some(cursor);
+            }
+            cursor += 1;
+        }
+    }
+
+    None
+}
+
+pub(super) fn custom_level_hit(
+    pos: Vec2,
+    width: f32,
+    height: f32,
+    item_count: usize,
+) -> Option<usize> {
+    (0..item_count).position(|index| {
+        let (button_pos, button_size) = custom_level_rect(index, width, height);
+        rect_hit(pos, button_pos, button_size)
     })
 }
 
@@ -35,6 +89,68 @@ pub(super) fn social_hit(pos: Vec2, width: f32, height: f32) -> Option<&'static 
     }
 
     None
+}
+
+impl App {
+    pub(in crate::app) fn displayed_progress_label(&self, difficulty_index: usize) -> String {
+        let level_index = self.displayed_progress_index(difficulty_index);
+
+        self.levels
+            .get(level_index)
+            .and_then(|level| level_code(&level.name))
+            .unwrap_or("0-1")
+            .to_string()
+    }
+
+    pub(in crate::app) fn selected_level_code(&self) -> Option<&'static str> {
+        chapter_level(self.chapter_cursor, self.level_cursor).map(|level| level.code)
+    }
+
+    pub(in crate::app) fn selected_catalog_level_index(&self) -> Option<usize> {
+        if is_custom_chapter(self.chapter_cursor) {
+            let custom_index = self.level_cursor.checked_sub(1)?;
+            return self.custom_level_indices().get(custom_index).copied();
+        }
+
+        let code = self.selected_level_code()?;
+
+        find_level_by_code(&self.levels, code)
+    }
+
+    pub(in crate::app) fn custom_level_indices(&self) -> Vec<usize> {
+        custom_level_indices(&self.levels)
+    }
+
+    pub(in crate::app) fn menu_level_count(&self) -> usize {
+        if is_custom_chapter(self.chapter_cursor) {
+            self.custom_level_indices().len() + 1
+        } else {
+            chapter_level_count(self.chapter_cursor)
+        }
+    }
+
+    pub(in crate::app) fn clamp_menu_cursors(&mut self) {
+        self.main_menu_cursor = self.main_menu_cursor.min(3);
+        self.difficulty_cursor = self.difficulty_cursor.min(Difficulty::COUNT - 1);
+        self.chapter_cursor = self.chapter_cursor.min(CHAPTERS.len() - 1);
+
+        let count = self.menu_level_count();
+        if count == 0 {
+            self.level_cursor = 0;
+        } else {
+            self.level_cursor = self.level_cursor.min(count - 1);
+        }
+    }
+
+    fn displayed_progress_index(&self, difficulty_index: usize) -> usize {
+        let max_index = self.levels.len().saturating_sub(1);
+
+        self.difficulty_progress
+            .get(difficulty_index..)
+            .and_then(|progress| progress.iter().max().copied())
+            .unwrap_or(0)
+            .min(max_index)
+    }
 }
 
 pub(super) fn options_back_hit(pos: Vec2, width: f32, height: f32) -> bool {
@@ -127,6 +243,76 @@ fn menu_buttons(width: f32, height: f32) -> [(Vec2, Vec2); 4] {
             button_size,
         ),
     ]
+}
+
+fn difficulty_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let button_size = Vec2::new(
+        (width * 0.31).clamp(360.0, 580.0),
+        (height * 0.058).clamp(46.0, 64.0),
+    );
+    let gap = (height * 0.012).clamp(8.0, 14.0);
+    let group_gap = (height * 0.07).clamp(52.0, 84.0);
+    let top = (height * 0.185).clamp(104.0, 178.0);
+    let group_offset = if index >= 4 {
+        group_gap * 2.0
+    } else if index >= 2 {
+        group_gap
+    } else {
+        0.0
+    };
+    let y = top + index as f32 * (button_size.y + gap) + group_offset;
+
+    (Vec2::new(menu_left(width), y), button_size)
+}
+
+fn chapter_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let button_size = Vec2::new(
+        (width * 0.35).clamp(430.0, 650.0),
+        (height * 0.058).clamp(48.0, 64.0),
+    );
+    let top = (height * 0.26).clamp(154.0, 260.0);
+    let gap = (height * 0.017).clamp(10.0, 18.0);
+    let section_gap = (height * 0.048).clamp(36.0, 54.0);
+    let extra = if index >= 4 { section_gap } else { 0.0 };
+    let y = top + index as f32 * (button_size.y + gap) + extra;
+
+    (Vec2::new((width - button_size.x) * 0.5, y), button_size)
+}
+
+fn layer_level_rect(
+    layer_index: usize,
+    level_index: usize,
+    width: f32,
+    height: f32,
+) -> (Vec2, Vec2) {
+    let margin = (width * 0.038).clamp(36.0, 76.0);
+    let gap = (width * 0.035).clamp(30.0, 66.0);
+    let columns = 4.0;
+    let card_w = ((width - margin * 2.0 - gap * (columns - 1.0)) / columns).clamp(190.0, 330.0);
+    let card_h = (height * 0.145).clamp(98.0, 158.0);
+    let row_step = (height * 0.28).clamp(182.0, 272.0);
+    let top = (height * 0.26).clamp(150.0, 242.0);
+    let x = margin + level_index as f32 * (card_w + gap);
+    let y = top + layer_index as f32 * row_step;
+
+    (Vec2::new(x, y), Vec2::new(card_w, card_h))
+}
+
+fn custom_level_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let columns = if width < 920.0 { 2 } else { 4 };
+    let columns_f = columns as f32;
+    let margin = (width * 0.055).clamp(42.0, 96.0);
+    let gap = (width * 0.028).clamp(24.0, 54.0);
+    let card_w = ((width - margin * 2.0 - gap * (columns_f - 1.0)) / columns_f).clamp(210.0, 360.0);
+    let card_h = (height * 0.15).clamp(104.0, 160.0);
+    let col = (index % columns) as f32;
+    let row = (index / columns) as f32;
+    let top = (height * 0.26).clamp(148.0, 238.0);
+
+    (
+        Vec2::new(margin + col * (card_w + gap), top + row * (card_h + 36.0)),
+        Vec2::new(card_w, card_h),
+    )
 }
 
 fn options_back_button(width: f32, height: f32) -> (Vec2, Vec2) {

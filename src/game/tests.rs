@@ -1,9 +1,9 @@
 use glam::Vec2;
 
-use super::World;
 use super::level::{Checkpoint, Door, Hazard, Level, LevelTrigger, Solid, WorldPortal};
 use super::player::{Player, PlayerEvent};
 use super::portal::{Color, Portal};
+use super::{Difficulty, World};
 use crate::constants::{
     AIR_SLIDE_WALL_KICK_Y, DASH_SPEED, DIVE_BOOST, FILTH_SIZE, GRAVITY, JUMP_VELOCITY,
     MAX_DASH_CHARGES, PLAYER_SIZE, PLAYER_SPEED, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
@@ -1166,6 +1166,28 @@ fn enemy_spawn_trigger_activates_first_wave_only() {
 }
 
 #[test]
+fn enemy_spawn_trigger_uses_original_spawn_position() {
+    let mut world = World::new();
+    let input = Input::new();
+    let mut enemy = super::enemy::Enemy::filth_spawn(220.0, 171.0, 1, 1);
+
+    enemy.pos = Vec2::new(500.0, 171.0);
+    enemy.prev_pos = enemy.pos;
+    world.level = Level {
+        solids: vec![Solid::new(0.0, 200.0, 620.0, 24.0, false)],
+        enemies: vec![enemy],
+        triggers: vec![LevelTrigger::enemy_spawn(90.0, 120.0, 80.0, 90.0, 1)],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 164.0);
+
+    world.update(0.0, &input, 900.0, 600.0);
+
+    assert_eq!(world.level.enemies[0].spawn_pos, Vec2::new(220.0, 171.0));
+    assert_eq!(world.level.enemies[0].pos, Vec2::new(220.0, 171.0));
+}
+
+#[test]
 fn enemy_spawn_wave_two_waits_for_wave_one_death() {
     let mut world = World::new();
     let input = Input::new();
@@ -1187,6 +1209,42 @@ fn enemy_spawn_wave_two_waits_for_wave_one_death() {
 
     assert!(!world.level.enemies[0].is_active());
     assert!(world.level.enemies[1].is_active());
+}
+
+#[test]
+fn respawn_resets_spawn_triggers_and_hides_wave_enemies() {
+    let mut world = World::new();
+    let input = Input::new();
+
+    world.level = Level {
+        solids: vec![Solid::new(0.0, 200.0, 420.0, 24.0, false)],
+        enemies: vec![super::enemy::Enemy::filth_spawn(220.0, 171.0, 1, 1)],
+        triggers: vec![LevelTrigger::enemy_spawn(90.0, 120.0, 80.0, 90.0, 1)],
+        ..Level::empty()
+    };
+    world.player = Player::new(130.0, 164.0);
+
+    world.update(1.0 / 60.0, &input, 900.0, 600.0);
+    assert!(world.level.triggers[0].fired);
+    assert!(world.level.enemies[0].is_active());
+
+    world.respawn_player();
+
+    assert!(!world.level.triggers[0].fired);
+    assert!(!world.level.enemies[0].active);
+    assert!(!world.level.enemies[0].spawned);
+    assert_eq!(world.level.enemies[0].pos, Vec2::new(220.0, 171.0));
+}
+
+#[test]
+fn difficulty_sets_player_max_health() {
+    let world = World::from_level_with_difficulty(
+        &crate::game::levels::LevelSpec::fallback(),
+        Difficulty::Harmless,
+    );
+
+    assert_eq!(world.player.max_health, 200.0);
+    assert_eq!(world.player.health, 200.0);
 }
 
 #[test]

@@ -15,8 +15,8 @@ use crate::settings::{OptionsTab, Settings, VolumeKind};
 use audio::Audio;
 use camera::Camera;
 use editor::Editor;
-use game::World;
 use game::levels::{LevelSpec, load_levels, save_level};
+use game::{Difficulty, World};
 use glam::Vec2;
 use platform::input::Input;
 use render::Renderer;
@@ -35,6 +35,13 @@ pub struct App {
     levels: Vec<LevelSpec>,
     current_level: usize,
     mode: AppMode,
+    menu_screen: MenuScreen,
+    main_menu_cursor: usize,
+    selected_difficulty: Difficulty,
+    difficulty_cursor: usize,
+    chapter_cursor: usize,
+    level_cursor: usize,
+    difficulty_progress: [usize; Difficulty::COUNT],
     settings: Settings,
     options_tab: OptionsTab,
     binding_capture: Option<platform::input::GameKey>,
@@ -72,6 +79,13 @@ impl App {
             levels,
             current_level: 0,
             mode: AppMode::LevelMenu,
+            menu_screen: MenuScreen::Main,
+            main_menu_cursor: 0,
+            selected_difficulty: Difficulty::Standard,
+            difficulty_cursor: Difficulty::Standard.index(),
+            chapter_cursor: 0,
+            level_cursor: 0,
+            difficulty_progress: [0; Difficulty::COUNT],
             settings: Settings::new(),
             options_tab: OptionsTab::General,
             binding_capture: None,
@@ -93,12 +107,23 @@ impl App {
 
     fn load_current_level(&mut self) {
         if let Some(level) = self.levels.get(self.current_level) {
-            self.world.load_level(level);
+            self.world
+                .load_level_with_difficulty(level, self.selected_difficulty);
             self.camera.center = self.world.player.pos;
             self.editor = Editor::new();
             self.input.release_gameplay();
             self.audio.stop_actions();
         }
+    }
+
+    fn complete_current_level(&mut self) {
+        let difficulty = self.selected_difficulty.index();
+        self.difficulty_progress[difficulty] =
+            self.difficulty_progress[difficulty].max(self.current_level);
+        self.menu_screen = MenuScreen::Layer;
+        self.mode = AppMode::LevelMenu;
+        self.input.release_gameplay();
+        self.audio.stop_actions();
     }
 
     fn save_current_level(&mut self) {
@@ -110,6 +135,31 @@ impl App {
         if save_level(level).is_ok() {
             self.editor.mark_saved();
         }
+    }
+
+    fn create_custom_level(&mut self) {
+        let mut level = LevelSpec::custom_template(self.next_custom_level_name());
+        if save_level(&mut level).is_err() {
+            return;
+        }
+
+        self.levels.push(level);
+        self.current_level = self.levels.len() - 1;
+        self.level_cursor = self.custom_level_indices().len();
+        self.load_current_level();
+        self.mode = AppMode::Editor;
+        self.editor.mark_saved();
+    }
+
+    fn next_custom_level_name(&self) -> String {
+        for index in 1..10_000 {
+            let name = format!("CUSTOM LEVEL {index}");
+            if self.levels.iter().all(|level| level.name != name) {
+                return name;
+            }
+        }
+
+        "CUSTOM LEVEL".to_string()
     }
 
     fn refresh_cursor_world(&mut self) {
@@ -137,9 +187,18 @@ enum AppMode {
     Editor,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuScreen {
+    Main,
+    Difficulty,
+    Chapter,
+    Layer,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::progression::CUSTOM_LEVELS_CHAPTER_INDEX;
     use crate::platform::input::GameKey;
     use winit::keyboard::KeyCode;
 
@@ -152,10 +211,10 @@ mod tests {
         let mut app = test_app();
 
         app.handle_menu_key(KeyCode::ArrowUp);
-        assert_eq!(app.current_level, 0);
+        assert_eq!(app.main_menu_cursor, 0);
 
         app.handle_menu_key(KeyCode::ArrowDown);
-        assert!(app.current_level < app.levels.len());
+        assert!(app.main_menu_cursor < 4);
     }
 
     #[test]
@@ -181,5 +240,17 @@ mod tests {
         app.handle_changelog_key(KeyCode::Enter);
 
         assert!(matches!(app.mode, AppMode::LevelMenu));
+    }
+
+    #[test]
+    fn custom_levels_chapter_opens_layer_screen() {
+        let mut app = test_app();
+
+        app.menu_screen = MenuScreen::Chapter;
+        app.chapter_cursor = CUSTOM_LEVELS_CHAPTER_INDEX;
+        app.handle_menu_key(KeyCode::Enter);
+
+        assert_eq!(app.menu_screen, MenuScreen::Layer);
+        assert_eq!(app.menu_level_count(), app.custom_level_indices().len() + 1);
     }
 }

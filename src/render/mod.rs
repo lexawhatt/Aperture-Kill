@@ -9,7 +9,6 @@ use glam::Vec2;
 
 use crate::game::World;
 use crate::game::level::{LevelTriggerKind, WorldPortal};
-use crate::game::levels::LevelSpec;
 use crate::game::player::Player;
 use crate::game::portal::{Color, Portal};
 use crate::platform::input::GameKey;
@@ -27,10 +26,7 @@ pub struct Renderer;
 
 pub enum RenderMode<'a> {
     Playing,
-    LevelMenu {
-        levels: &'a [LevelSpec],
-        selected: usize,
-    },
+    LevelMenu(&'a LevelMenuOverlay),
     Changelog,
     Options {
         settings: &'a Settings,
@@ -39,6 +35,27 @@ pub enum RenderMode<'a> {
         resolution_dropdown: bool,
     },
     Editor(&'a EditorOverlay),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelMenuScreen {
+    Main,
+    Difficulty,
+    Chapter,
+    Layer,
+}
+
+pub struct LevelMenuOverlay {
+    pub screen: LevelMenuScreen,
+    pub main_cursor: usize,
+    pub difficulty_cursor: usize,
+    pub selected_difficulty: usize,
+    pub difficulty_hover: Option<usize>,
+    pub difficulty_progress: [String; crate::game::Difficulty::COUNT],
+    pub chapter_cursor: usize,
+    pub level_cursor: usize,
+    pub available_level_codes: Vec<String>,
+    pub custom_level_names: Vec<String>,
 }
 
 pub struct RenderFrame<'frame, 'data> {
@@ -67,13 +84,25 @@ pub struct EditorOverlay {
     pub marquee: Option<(Vec2, Vec2)>,
     pub active_tool: usize,
     pub active_tool_label: &'static str,
+    pub active_category: usize,
+    pub active_category_label: &'static str,
+    pub active_layer: i16,
+    pub editor_mode: usize,
+    pub editor_mode_label: &'static str,
     pub selection_kind: &'static str,
+    pub object_meta: Option<EditorObjectMeta>,
     pub inspector: EditorInspector,
     pub inspector_open: bool,
     pub rotate_ui: bool,
     pub grid_snap: bool,
     pub dirty: bool,
     pub saved_flash: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct EditorObjectMeta {
+    pub id: u16,
+    pub layer: i16,
 }
 
 #[derive(Clone, Copy)]
@@ -166,8 +195,8 @@ impl Renderer {
 
         match mode {
             RenderMode::Playing => {}
-            RenderMode::LevelMenu { levels, selected } => {
-                canvas.level_menu(levels, selected);
+            RenderMode::LevelMenu(menu) => {
+                canvas.level_menu(menu);
             }
             RenderMode::Changelog => {
                 canvas.changelog_menu();
@@ -283,7 +312,11 @@ impl Renderer {
             .iter()
             .filter(|enemy| editor_mode || enemy.is_active())
         {
-            canvas.enemy(enemy);
+            if editor_mode {
+                canvas.enemy_spawn_preview(enemy);
+            } else {
+                canvas.enemy(enemy);
+            }
         }
 
         if let Some(beam) = world.piercer.beam {
@@ -426,7 +459,18 @@ mod tests {
     fn draw_level_menu_frame_touches_pixels() {
         let renderer = Renderer::new();
         let world = World::new();
-        let levels = vec![LevelSpec::fallback()];
+        let menu = LevelMenuOverlay {
+            screen: LevelMenuScreen::Main,
+            main_cursor: 0,
+            difficulty_cursor: 2,
+            selected_difficulty: 2,
+            difficulty_hover: None,
+            difficulty_progress: std::array::from_fn(|_| "0-1".to_string()),
+            chapter_cursor: 0,
+            level_cursor: 0,
+            available_level_codes: vec!["0-1".to_string()],
+            custom_level_names: Vec::new(),
+        };
         let mut frame = vec![0; 320 * 180];
 
         renderer.draw(RenderFrame {
@@ -434,10 +478,7 @@ mod tests {
             width: 320,
             height: 180,
             world: &world,
-            mode: RenderMode::LevelMenu {
-                levels: &levels,
-                selected: 0,
-            },
+            mode: RenderMode::LevelMenu(&menu),
             camera: world.player.pos,
             zoom: 0.5,
             debug: None,

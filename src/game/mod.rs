@@ -1,10 +1,12 @@
 mod ai;
+pub mod difficulty;
 pub mod enemy;
 pub mod geometry;
 pub mod level;
 pub mod levels;
 pub mod player;
 pub mod portal;
+pub mod progression;
 
 // World owns gameplay simulation and keeps rendering out of physics.
 #[cfg(test)]
@@ -16,6 +18,7 @@ use crate::constants::{
     PLAYER_DEATH_LAUGH_LOOP_TIME, PLAYER_DEATH_PROMPT_TIME, PLAYER_DEATH_TEXT_RATE,
     PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
 };
+pub use crate::game::difficulty::Difficulty;
 use crate::game::level::{CollisionGeometry, DoorEvent, Level, LevelTriggerKind, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
@@ -35,7 +38,9 @@ pub struct World {
     pub portals: [Option<Portal>; 2],
     pub piercer: PiercerState,
     pub death: Option<DeathSequence>,
+    pub level_completed: bool,
     pub damage_pulse: DamagePulse,
+    pub difficulty: Difficulty,
     respawn_pos: glam::Vec2,
     sound_events: Vec<SoundEvent>,
     door_events: Vec<(usize, DoorEvent)>,
@@ -233,17 +238,23 @@ impl World {
     }
 
     pub fn from_level(level: &LevelSpec) -> Self {
+        Self::from_level_with_difficulty(level, Difficulty::Standard)
+    }
+
+    pub fn from_level_with_difficulty(level: &LevelSpec, difficulty: Difficulty) -> Self {
         let mut level_data = level.level();
         level_data.reset_runtime_state();
         let spawn = level_data.level_start_pos().unwrap_or(level.spawn);
 
         Self {
             level: level_data,
-            player: Player::new(spawn.x, spawn.y),
+            player: Player::new_with_max_health(spawn.x, spawn.y, difficulty.player_max_health()),
             portals: [None, None],
             piercer: PiercerState::new(),
             death: None,
+            level_completed: false,
             damage_pulse: DamagePulse::new(),
+            difficulty,
             respawn_pos: spawn,
             sound_events: Vec::new(),
             door_events: Vec::new(),
@@ -255,15 +266,17 @@ impl World {
         }
     }
 
-    pub fn load_level(&mut self, level: &LevelSpec) {
+    pub fn load_level_with_difficulty(&mut self, level: &LevelSpec, difficulty: Difficulty) {
         self.level = level.level();
         self.level.reset_runtime_state();
         let spawn = self.level.level_start_pos().unwrap_or(level.spawn);
+        self.difficulty = difficulty;
 
-        self.player = Player::new(spawn.x, spawn.y);
+        self.player = Player::new_with_max_health(spawn.x, spawn.y, difficulty.player_max_health());
         self.portals = [None, None];
         self.piercer = PiercerState::new();
         self.death = None;
+        self.level_completed = false;
         self.damage_pulse = DamagePulse::new();
         self.respawn_pos = spawn;
         self.sound_events.clear();
@@ -315,6 +328,10 @@ impl World {
 
     pub fn take_camera_shift(&mut self) -> glam::Vec2 {
         std::mem::take(&mut self.camera_shift)
+    }
+
+    pub fn take_level_completed(&mut self) -> bool {
+        std::mem::take(&mut self.level_completed)
     }
 
     fn tick_doors(&mut self, dt: f32) {
@@ -706,6 +723,8 @@ impl World {
     fn tick_enemies(&mut self, dt: f32) {
         let player_pos = self.player.pos;
         let mut damage = 0.0;
+        let enemy_speed = self.difficulty.enemy_speed_multiplier();
+        let enemy_damage = self.difficulty.enemy_damage_multiplier();
         let portal_links = ai::portal_links(self.portals, &self.level.world_portals);
         let collision_portals = ai::collision_portals(&portal_links);
         let targets =
@@ -723,6 +742,8 @@ impl World {
                 target.can_attack,
                 collision,
                 &collision_portals,
+                enemy_speed,
+                enemy_damage,
             ) {
                 damage += amount;
                 self.sound_events.push(SoundEvent::FilthBite(enemy.pos));
@@ -820,7 +841,11 @@ impl World {
             }
 
             match trigger.kind {
-                LevelTriggerKind::LevelStart | LevelTriggerKind::LevelEnd => {}
+                LevelTriggerKind::LevelStart => {}
+                LevelTriggerKind::LevelEnd => {
+                    trigger.fired = true;
+                    self.level_completed = true;
+                }
                 LevelTriggerKind::EnemySpawn { enemy_id } => {
                     trigger.fired = true;
                     enemy_spawns.push(enemy_id);
@@ -835,7 +860,13 @@ impl World {
     }
 
     fn respawn_player(&mut self) {
-        self.player = Player::new(self.respawn_pos.x, self.respawn_pos.y);
+        self.level.reset_runtime_state();
+        self.level_completed = false;
+        self.player = Player::new_with_max_health(
+            self.respawn_pos.x,
+            self.respawn_pos.y,
+            self.difficulty.player_max_health(),
+        );
         self.portals = [None, None];
         self.piercer = PiercerState::new();
         self.death = None;

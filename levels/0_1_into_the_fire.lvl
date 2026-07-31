@@ -1,13 +1,24 @@
-name 0-1 INTO THE FIRE
-player -648 360
-solid -704 416 2320 32 false 0
-enemy filth -404.96237 387 1 1
-enemy filth -370.96234 387 1 1
-enemy filth -302.96213 387 1 1
-enemy filth -336.96222 387 1 1
-enemy filth -268.96207 387 1 1
-enemy filth -234.96202 387 1 1
-enemy filth 384 368 1 2
-trigger level_start -672 320 48 80
-trigger level_end 1552 336 48 80
-trigger enemy_spawn -112 304 128 96 1
+portals_level version=3
+level name="0-1 INTO THE FIRE" spawn_x=-632 spawn_y=-248
+solid x=-704 y=416 w=2320 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=-704 y=-336 w=32 h=752 portalable=false rotation=0 obj_id=0 layer=0
+solid x=-592 y=-336 w=32 h=640 portalable=false rotation=0 obj_id=0 layer=0
+solid x=-560 y=272 w=176 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=-672 y=-336 w=80 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=-144 y=16 w=128 h=32 portalable=true rotation=0 obj_id=0 layer=0
+solid x=272 y=304 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=128 y=112 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=400 y=112 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
+door x=-448 y=304 w=32 h=112 radius=112 rotation=0 speed=3.6 automatic=true obj_id=0 layer=0
+enemy kind=filth spawn_x=288 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=352 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=416 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=480 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=224 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=160 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
+enemy kind=filth spawn_x=288 spawn_y=272 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
+enemy kind=filth spawn_x=352 spawn_y=272 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
+enemy kind=filth spawn_x=177 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
+enemy kind=filth spawn_x=449 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
+trigger kind=level_start x=-656 y=-288 w=48 h=80 obj_id=0 layer=0
+trigger kind=enemy_spawn x=-144 y=48 w=128 h=368 enemy_id=1 obj_id=0 layer=0

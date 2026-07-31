@@ -13,6 +13,47 @@ const PORTAL_CLEARANCE: f32 = 1.0;
 const DEFAULT_DOOR_RADIUS: f32 = 112.0;
 const DEFAULT_DOOR_SPEED: f32 = 3.6;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectMeta {
+    pub id: u16,
+    pub layer: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelObjectKind {
+    Solid,
+    Door,
+    Hazard,
+    Checkpoint,
+    Enemy,
+    Trigger,
+    Text,
+    WorldPortal,
+}
+
+impl LevelObjectKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "solid" => Some(Self::Solid),
+            "door" => Some(Self::Door),
+            "hazard" | "acid" => Some(Self::Hazard),
+            "checkpoint" | "check" => Some(Self::Checkpoint),
+            "enemy" => Some(Self::Enemy),
+            "trigger" => Some(Self::Trigger),
+            "text" => Some(Self::Text),
+            "world_portal" | "world-portal" => Some(Self::WorldPortal),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelObjectMeta {
+    pub kind: LevelObjectKind,
+    pub index: usize,
+    pub meta: ObjectMeta,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Solid {
     pos: Vec2,
@@ -515,6 +556,7 @@ pub struct Level {
     pub triggers: Vec<LevelTrigger>,
     pub texts: Vec<LevelText>,
     pub world_portals: Vec<WorldPortal>,
+    pub metadata: Vec<LevelObjectMeta>,
 }
 
 #[derive(Clone, Copy)]
@@ -583,6 +625,7 @@ impl Level {
             triggers: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
+            metadata: Vec::new(),
         }
     }
 
@@ -606,6 +649,7 @@ impl Level {
             triggers: Vec::new(),
             texts: Vec::new(),
             world_portals: Vec::new(),
+            metadata: Vec::new(),
         }
     }
 
@@ -623,6 +667,54 @@ impl Level {
             .iter()
             .find(|trigger| trigger.kind == LevelTriggerKind::LevelStart)
             .map(|trigger| trigger.center())
+    }
+
+    pub fn object_meta(&self, kind: LevelObjectKind, index: usize) -> ObjectMeta {
+        self.metadata
+            .iter()
+            .find(|entry| entry.kind == kind && entry.index == index)
+            .map(|entry| entry.meta)
+            .unwrap_or_default()
+    }
+
+    pub fn set_object_meta(&mut self, kind: LevelObjectKind, index: usize, meta: ObjectMeta) {
+        if meta == ObjectMeta::default() {
+            self.metadata
+                .retain(|entry| !(entry.kind == kind && entry.index == index));
+            return;
+        }
+
+        if let Some(entry) = self
+            .metadata
+            .iter_mut()
+            .find(|entry| entry.kind == kind && entry.index == index)
+        {
+            entry.meta = meta;
+        } else {
+            self.metadata.push(LevelObjectMeta { kind, index, meta });
+        }
+    }
+
+    pub fn remove_object_metadata(&mut self, kind: LevelObjectKind, removed_indices: &[usize]) {
+        let mut removed = removed_indices.to_vec();
+        removed.sort_unstable();
+        removed.dedup();
+        if removed.is_empty() {
+            return;
+        }
+
+        let mut metadata = Vec::with_capacity(self.metadata.len());
+        for mut entry in self.metadata.drain(..) {
+            if entry.kind == kind {
+                if removed.binary_search(&entry.index).is_ok() {
+                    continue;
+                }
+
+                entry.index -= removed.partition_point(|index| *index < entry.index);
+            }
+            metadata.push(entry);
+        }
+        self.metadata = metadata;
     }
 
     pub fn update_doors(

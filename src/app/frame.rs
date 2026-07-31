@@ -2,11 +2,14 @@ use std::num::NonZeroU32;
 use std::time::Instant;
 
 // Per-frame order: input, simulation/camera, then render.
-use crate::app::{App, AppMode};
+use crate::app::menu::difficulty_hit;
+use crate::app::{App, AppMode, MenuScreen};
 use crate::game::level::LevelTriggerKind;
+use crate::game::progression::{custom_level_indices, level_code};
 use crate::render::{
     DebugOverlay, EditorDoorInspector, EditorEnemyInspector, EditorEnemySpawnTriggerInspector,
-    EditorInspector, EditorOverlay, EditorWorldPortalInspector, RenderFrame, RenderMode,
+    EditorInspector, EditorObjectMeta, EditorOverlay, EditorWorldPortalInspector, LevelMenuOverlay,
+    LevelMenuScreen, RenderFrame, RenderMode,
 };
 
 impl App {
@@ -65,6 +68,10 @@ impl App {
         for event in self.world.drain_sound_events() {
             self.audio.play(event, listener);
         }
+        if self.world.take_level_completed() {
+            self.complete_current_level();
+            return;
+        }
         self.camera.center += self.world.take_camera_shift();
         self.camera.follow(self.world.player.pos, dt);
         self.refresh_cursor_world_for(width, height);
@@ -80,12 +87,16 @@ impl App {
 
     fn render_frame(&mut self, width: u32, height: u32) {
         let editor_overlay = (self.mode == AppMode::Editor).then(|| self.editor_overlay());
+        let level_menu_overlay =
+            (self.mode == AppMode::LevelMenu).then(|| self.level_menu_overlay(width, height));
         let render_mode = match self.mode {
             AppMode::Playing => RenderMode::Playing,
-            AppMode::LevelMenu => RenderMode::LevelMenu {
-                levels: &self.levels,
-                selected: self.current_level,
-            },
+            AppMode::LevelMenu => {
+                let Some(overlay) = level_menu_overlay.as_ref() else {
+                    return;
+                };
+                RenderMode::LevelMenu(overlay)
+            }
             AppMode::Changelog => RenderMode::Changelog,
             AppMode::Options => RenderMode::Options {
                 settings: &self.settings,
@@ -224,14 +235,65 @@ impl App {
             text_editing: self.editor.text_editing(),
             marquee: self.editor.marquee_rect(),
             active_tool: self.editor.tool.index(),
-            active_tool_label: self.editor.tool.label(),
+            active_tool_label: if self.editor.category().contains_tool(self.editor.tool) {
+                self.editor.tool.label()
+            } else {
+                self.editor.category().label()
+            },
+            active_category: self.editor.category().index(),
+            active_category_label: self.editor.category().label(),
+            active_layer: self.editor.active_layer(&self.world.level),
+            editor_mode: self.editor.mode().index(),
+            editor_mode_label: self.editor.mode().label(),
             selection_kind: self.editor.primary_selection_kind().label(),
+            object_meta: self
+                .editor
+                .primary_object_meta(&self.world.level)
+                .map(|meta| EditorObjectMeta {
+                    id: meta.id,
+                    layer: meta.layer,
+                }),
             inspector,
             inspector_open: self.editor_inspector_open,
             rotate_ui: self.editor.rotate_ui,
             grid_snap: self.editor.grid_snap(),
             dirty: self.editor.dirty,
             saved_flash: self.editor.status_timer > 0.0,
+        }
+    }
+
+    fn level_menu_overlay(&self, width: u32, height: u32) -> LevelMenuOverlay {
+        let difficulty_hover = difficulty_hit(self.cursor_screen, width as f32, height as f32)
+            .filter(|index| {
+                self.menu_screen == MenuScreen::Difficulty
+                    && *index < crate::game::Difficulty::COUNT
+            });
+
+        LevelMenuOverlay {
+            screen: match self.menu_screen {
+                MenuScreen::Main => LevelMenuScreen::Main,
+                MenuScreen::Difficulty => LevelMenuScreen::Difficulty,
+                MenuScreen::Chapter => LevelMenuScreen::Chapter,
+                MenuScreen::Layer => LevelMenuScreen::Layer,
+            },
+            main_cursor: self.main_menu_cursor,
+            difficulty_cursor: self.difficulty_cursor,
+            selected_difficulty: self.selected_difficulty.index(),
+            difficulty_hover,
+            difficulty_progress: std::array::from_fn(|index| self.displayed_progress_label(index)),
+            chapter_cursor: self.chapter_cursor,
+            level_cursor: self.level_cursor,
+            available_level_codes: self
+                .levels
+                .iter()
+                .filter_map(|level| level_code(&level.name))
+                .map(str::to_string)
+                .collect(),
+            custom_level_names: custom_level_indices(&self.levels)
+                .into_iter()
+                .filter_map(|index| self.levels.get(index))
+                .map(|level| level.name.clone())
+                .collect(),
         }
     }
 

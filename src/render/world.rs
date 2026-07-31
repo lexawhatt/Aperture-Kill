@@ -197,12 +197,17 @@ impl Canvas<'_> {
 
     pub(super) fn enemy(&mut self, enemy: &Enemy) {
         match enemy.kind {
-            EnemyKind::Filth => self.filth(enemy),
+            EnemyKind::Filth => self.filth(enemy, enemy.solid()),
         }
     }
 
-    fn filth(&mut self, enemy: &Enemy) {
-        let solid = enemy.solid();
+    pub(super) fn enemy_spawn_preview(&mut self, enemy: &Enemy) {
+        match enemy.kind {
+            EnemyKind::Filth => self.filth(enemy, enemy.spawn_solid()),
+        }
+    }
+
+    fn filth(&mut self, enemy: &Enemy, solid: Solid) {
         let flash = enemy.hurt_flash > 0.0;
         let fill = if flash {
             Color::rgb(255, 235, 235)
