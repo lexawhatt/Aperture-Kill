@@ -1,5 +1,7 @@
+pub mod backend;
 mod canvas;
 mod glyphs;
+mod plan;
 mod text;
 mod ui;
 mod world;
@@ -15,6 +17,7 @@ use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings};
 
 use canvas::{Canvas, Rect};
+use plan::{RenderPlan, WorldPortalRenderPlan};
 
 const PLAYER_SLAM_FILL: Color = Color::rgb(255, 224, 102);
 const PLAYER_DASH_FILL: Color = Color::rgb(80, 92, 130);
@@ -58,8 +61,7 @@ pub struct LevelMenuOverlay {
     pub custom_level_names: Vec<String>,
 }
 
-pub struct RenderFrame<'frame, 'data> {
-    pub frame: &'frame mut [u32],
+pub struct RenderScene<'data> {
     pub width: u32,
     pub height: u32,
     pub world: &'data World,
@@ -165,9 +167,8 @@ impl Renderer {
         Self
     }
 
-    pub fn draw(&self, render: RenderFrame<'_, '_>) {
-        let RenderFrame {
-            frame,
+    fn draw_scene_with_plan(&self, frame: &mut [u32], scene: RenderScene<'_>, plan: &RenderPlan) {
+        let RenderScene {
             width,
             height,
             world,
@@ -176,12 +177,12 @@ impl Renderer {
             zoom,
             debug,
             fps,
-        } = render;
+        } = scene;
         let mut canvas = Canvas::new(frame, width, height, camera, zoom);
         let editor_mode = matches!(&mode, RenderMode::Editor(_));
 
         canvas.clear(Color::rgb(9, 10, 14));
-        self.draw_world(&mut canvas, world, editor_mode);
+        self.draw_world(&mut canvas, world, editor_mode, &plan.world_portals);
         canvas.hud(
             world.player.health,
             world.player.health_percent(),
@@ -220,18 +221,17 @@ impl Renderer {
         }
     }
 
-    fn draw_world(&self, canvas: &mut Canvas<'_>, world: &World, editor_mode: bool) {
-        canvas.seamless_portal_views(world);
-        let seamless_portals = world
-            .level
-            .world_portals
-            .iter()
-            .copied()
-            .filter(|portal| portal.seamless)
-            .collect::<Vec<_>>();
+    fn draw_world(
+        &self,
+        canvas: &mut Canvas<'_>,
+        world: &World,
+        editor_mode: bool,
+        portal_plan: &WorldPortalRenderPlan,
+    ) {
+        canvas.seamless_portal_views(world, portal_plan);
 
         // Static geometry is drawn first so portals and actors stay readable.
-        for solid in &world.level.solids {
+        for (solid_index, solid) in world.level.solids.iter().enumerate() {
             let fill = if solid.portalable {
                 Color::rgb(36, 42, 53)
             } else {
@@ -241,7 +241,7 @@ impl Renderer {
                 *solid,
                 fill,
                 Color::rgb(92, 105, 125),
-                &seamless_portals,
+                portal_plan.cuts_for_solid(solid_index),
             );
         }
 
@@ -438,19 +438,23 @@ mod tests {
     fn draw_playing_frame_touches_pixels() {
         let renderer = Renderer::new();
         let world = World::new();
+        let plan = RenderPlan::build(&world);
         let mut frame = vec![0; 320 * 180];
 
-        renderer.draw(RenderFrame {
-            frame: &mut frame,
-            width: 320,
-            height: 180,
-            world: &world,
-            mode: RenderMode::Playing,
-            camera: world.player.pos,
-            zoom: 0.5,
-            debug: None,
-            fps: None,
-        });
+        renderer.draw_scene_with_plan(
+            &mut frame,
+            RenderScene {
+                width: 320,
+                height: 180,
+                world: &world,
+                mode: RenderMode::Playing,
+                camera: world.player.pos,
+                zoom: 0.5,
+                debug: None,
+                fps: None,
+            },
+            &plan,
+        );
 
         assert!(frame.iter().any(|pixel| *pixel != 0));
     }
@@ -471,19 +475,23 @@ mod tests {
             available_level_codes: vec!["0-1".to_string()],
             custom_level_names: Vec::new(),
         };
+        let plan = RenderPlan::build(&world);
         let mut frame = vec![0; 320 * 180];
 
-        renderer.draw(RenderFrame {
-            frame: &mut frame,
-            width: 320,
-            height: 180,
-            world: &world,
-            mode: RenderMode::LevelMenu(&menu),
-            camera: world.player.pos,
-            zoom: 0.5,
-            debug: None,
-            fps: None,
-        });
+        renderer.draw_scene_with_plan(
+            &mut frame,
+            RenderScene {
+                width: 320,
+                height: 180,
+                world: &world,
+                mode: RenderMode::LevelMenu(&menu),
+                camera: world.player.pos,
+                zoom: 0.5,
+                debug: None,
+                fps: None,
+            },
+            &plan,
+        );
 
         assert!(frame.iter().any(|pixel| *pixel != 0));
     }

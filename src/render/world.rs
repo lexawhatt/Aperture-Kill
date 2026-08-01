@@ -1,84 +1,16 @@
 use glam::Vec2;
 
 // World drawing uses camera-transformed coordinates.
-use crate::constants::PORTAL_SURFACE_OFFSET;
 use crate::game::enemy::{Enemy, EnemyKind};
-use crate::game::level::{Checkpoint, Door, Hazard, Solid, WorldPortal};
+use crate::game::level::{Checkpoint, Door, Hazard, Solid};
 use crate::game::portal::{Color, Portal};
 use crate::game::{PiercerBeam, World};
 
 use super::canvas::{Canvas, Rect, WorldClip};
+use super::plan::{
+    SeamlessCut, SeamlessPortalViewPlan, WorldPortalRenderPlan, seamless_portal_cuts_point,
+};
 use super::{PLAYER_OUTLINE, player_fill_color};
-
-const SEAMLESS_CUT_EPSILON: f32 = 2.0;
-
-#[derive(Clone, Copy)]
-struct SeamlessCut {
-    pos: Vec2,
-    normal: Vec2,
-    tangent: Vec2,
-    half_width: f32,
-    depth: f32,
-}
-
-fn seamless_cuts_for_solid(solid: Solid, portals: &[WorldPortal]) -> Vec<SeamlessCut> {
-    portals
-        .iter()
-        .filter_map(|world_portal| {
-            if !world_portal.seamless
-                || !solid.supports_portal(world_portal.portal, SEAMLESS_CUT_EPSILON)
-            {
-                return None;
-            }
-
-            let portal = world_portal.portal;
-            Some(SeamlessCut {
-                pos: portal.pos,
-                normal: portal.normal(),
-                tangent: portal.tangent(),
-                half_width: portal.active_width() / 2.0 + SEAMLESS_CUT_EPSILON,
-                depth: world_portal.seamless_depth,
-            })
-        })
-        .collect()
-}
-
-fn seamless_portal_cuts_point(point: Vec2, cuts: &[SeamlessCut]) -> bool {
-    cuts.iter().any(|cut| {
-        let offset = point - cut.pos;
-        let tangent_distance = offset.dot(cut.tangent).abs();
-        let normal_distance = offset.dot(cut.normal);
-
-        tangent_distance <= cut.half_width
-            && normal_distance <= PORTAL_SURFACE_OFFSET + SEAMLESS_CUT_EPSILON
-            && normal_distance >= -cut.depth
-    })
-}
-
-fn solid_can_occlude_seamless_view(solid: Solid, source: WorldPortal) -> bool {
-    let (min, max) = solid.bounds();
-    let center = (min + max) / 2.0;
-    let radius = (max - min).length() / 2.0 + SEAMLESS_CUT_EPSILON;
-    let offset = center - source.portal.pos;
-    let distance = offset.dot(source.portal.normal());
-
-    if distance > radius || distance < -source.seamless_depth - radius {
-        return false;
-    }
-
-    let half_angle_cos = (source.seamless_angle.clamp(1.0, 360.0).to_radians() * 0.5).cos();
-    if half_angle_cos <= -1.0 {
-        return true;
-    }
-
-    let length = offset.length();
-    if length <= radius {
-        return true;
-    }
-
-    let angular_slack = (radius / length).min(1.0);
-    offset.normalize().dot(-source.portal.normal()) >= half_angle_cos - angular_slack
-}
 
 impl Canvas<'_> {
     pub(super) fn solid(&mut self, solid: Solid, fill: Color, outline: Color) {
@@ -90,9 +22,9 @@ impl Canvas<'_> {
         solid: Solid,
         fill: Color,
         outline: Color,
-        portals: &[WorldPortal],
+        cuts: &[SeamlessCut],
     ) {
-        self.solid_with_holes(solid, fill, outline, portals);
+        self.solid_with_holes(solid, fill, outline, cuts);
     }
 
     fn solid_with_holes(
@@ -100,14 +32,13 @@ impl Canvas<'_> {
         solid: Solid,
         fill: Color,
         outline: Color,
-        portals: &[WorldPortal],
+        cuts: &[SeamlessCut],
     ) {
         let corners = solid.corners().map(|corner| self.world_to_screen(corner));
         let (min, max) = corners.into_iter().fold(
             (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
             |(min, max), corner| (min.min(corner), max.max(corner)),
         );
-        let cuts = seamless_cuts_for_solid(solid, portals);
         let x0 = min.x.max(0.0) as i32;
         let y0 = min.y.max(0.0) as i32;
         let x1 = max.x.min(self.width as f32) as i32;
@@ -116,7 +47,7 @@ impl Canvas<'_> {
         for yy in y0..y1 {
             for xx in x0..x1 {
                 let point = self.screen_to_world(Vec2::new(xx as f32 + 0.5, yy as f32 + 0.5));
-                if solid.contains_point(point) && !seamless_portal_cuts_point(point, &cuts) {
+                if solid.contains_point(point) && !seamless_portal_cuts_point(point, cuts) {
                     self.put_px(xx, yy, fill);
                 }
             }
@@ -299,36 +230,25 @@ impl Canvas<'_> {
         }
     }
 
-    pub(super) fn seamless_portal_views(&mut self, world: &World) {
-        for (source_index, source) in world.level.world_portals.iter().enumerate() {
-            if !source.seamless {
-                continue;
-            }
-            let Some(destination_index) =
-                WorldPortal::unique_receiver_index(&world.level.world_portals, source_index)
-            else {
-                continue;
-            };
-            let Some(destination) = world.level.world_portals.get(destination_index) else {
-                continue;
-            };
-
-            self.seamless_portal_view(world, *source, *destination);
+    pub(super) fn seamless_portal_views(
+        &mut self,
+        world: &World,
+        portal_plan: &WorldPortalRenderPlan,
+    ) {
+        for view in &portal_plan.seamless_views {
+            self.seamless_portal_view(world, view);
         }
     }
 
-    fn seamless_portal_view(
-        &mut self,
-        world: &World,
-        source: WorldPortal,
-        destination: WorldPortal,
-    ) {
+    fn seamless_portal_view(&mut self, world: &World, view: &SeamlessPortalViewPlan) {
+        let source = view.source;
+        let destination = view.destination;
         let previous_clip = self.replace_clip(Some(WorldClip::behind_portal(
             source.portal.pos,
             source.portal.normal(),
             source.seamless_depth,
             source.seamless_angle,
-            seamless_occluding_walls(world, source),
+            view.occluding_walls.clone(),
         )));
 
         self.transformed_world(world, destination.portal, source.portal);
@@ -555,23 +475,6 @@ fn transformed_solid(from: Portal, to: Portal, solid: Solid) -> Option<Solid> {
         rotation,
         solid.portalable,
     ))
-}
-
-fn seamless_occluding_walls(world: &World, source: WorldPortal) -> Vec<Solid> {
-    if !source.seamless_rely_on_walls {
-        return Vec::new();
-    }
-
-    world
-        .level
-        .solids
-        .iter()
-        .copied()
-        .filter(|solid| {
-            !solid.supports_portal(source.portal, SEAMLESS_CUT_EPSILON)
-                && solid_can_occlude_seamless_view(*solid, source)
-        })
-        .collect()
 }
 
 fn rect_on_portal_side(rect: Rect, portal: Portal, outside: bool) -> Option<Rect> {

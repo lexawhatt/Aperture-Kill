@@ -20,7 +20,7 @@ use game::{Difficulty, World};
 use glam::Vec2;
 use platform::input::Input;
 use render::Renderer;
-use softbuffer::{Context, Surface};
+use render::backend::RenderBackend;
 use winit::keyboard::ModifiersState;
 use winit::window::Window;
 
@@ -28,8 +28,7 @@ use crate::{game, platform, render};
 
 pub struct App {
     window: Option<Arc<Window>>,
-    context: Option<Context<Arc<Window>>>,
-    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
+    render_backend: Option<RenderBackend>,
     input: Input,
     world: World,
     levels: Vec<LevelSpec>,
@@ -72,8 +71,7 @@ impl App {
 
         Self {
             window: None,
-            context: None,
-            surface: None,
+            render_backend: None,
             input: Input::new(),
             world,
             levels,

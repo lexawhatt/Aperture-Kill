@@ -1,4 +1,3 @@
-use std::num::NonZeroU32;
 use std::time::Instant;
 
 // Per-frame order: input, simulation/camera, then render.
@@ -9,7 +8,7 @@ use crate::game::progression::{custom_level_indices, level_code};
 use crate::render::{
     DebugOverlay, EditorDoorInspector, EditorEnemyInspector, EditorEnemySpawnTriggerInspector,
     EditorInspector, EditorObjectMeta, EditorOverlay, EditorWorldPortalInspector, LevelMenuOverlay,
-    LevelMenuScreen, RenderFrame, RenderMode,
+    LevelMenuScreen, RenderMode, RenderScene,
 };
 
 impl App {
@@ -125,34 +124,23 @@ impl App {
             .unwrap_or(self.camera.zoom);
         let debug = self.debug_overlay();
         let fps = self.settings.show_fps.then_some(self.fps);
-        let Some(surface) = self.surface.as_mut() else {
+        let Some(render_backend) = self.render_backend.as_mut() else {
             return;
         };
-        let Some(width) = NonZeroU32::new(width) else {
-            return;
-        };
-        let Some(height) = NonZeroU32::new(height) else {
-            return;
-        };
-        if surface.resize(width, height).is_err() {
-            return;
-        }
-        let Ok(mut buffer) = surface.buffer_mut() else {
-            return;
-        };
-
-        renderer.draw(RenderFrame {
-            frame: &mut buffer,
-            width: width.get(),
-            height: height.get(),
+        let scene = RenderScene {
+            width,
+            height,
             world,
             mode: render_mode,
             camera,
             zoom,
             debug,
             fps,
-        });
-        let _ = buffer.present();
+        };
+
+        if let Err(err) = render_backend.render(renderer, scene) {
+            eprintln!("Failed to render frame: {err}");
+        }
     }
 
     fn editor_overlay(&self) -> EditorOverlay {

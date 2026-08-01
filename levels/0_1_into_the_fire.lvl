@@ -9,6 +9,7 @@ solid x=-144 y=16 w=128 h=32 portalable=true rotation=0 obj_id=0 layer=0
 solid x=272 y=304 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
 solid x=128 y=112 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
 solid x=400 y=112 w=96 h=32 portalable=false rotation=0 obj_id=0 layer=0
+solid x=160 y=-128 w=96 h=32 portalable=true rotation=0 obj_id=0 layer=0
 door x=-448 y=304 w=32 h=112 radius=112 rotation=0 speed=3.6 automatic=true obj_id=0 layer=0
 enemy kind=filth spawn_x=288 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
 enemy kind=filth spawn_x=352 spawn_y=384 spawn_id=1 spawn_wave=1 obj_id=0 layer=0
@@ -22,3 +23,5 @@ enemy kind=filth spawn_x=177 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
 enemy kind=filth spawn_x=449 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
 trigger kind=level_start x=-656 y=-288 w=48 h=80 obj_id=0 layer=0
 trigger kind=enemy_spawn x=-144 y=48 w=128 h=368 enemy_id=1 obj_id=0 layer=0
+world_portal x=-208 y=192 normal_x=-1 normal_y=0.00000004371139 tangent_x=-0.00000004371139 tangent_y=-1 width=464 portal_id=1 receiver_id=2 priority=0 scale=1 scale_objects=false seamless=true seamless_depth=256 seamless_angle=180 seamless_rely_on_walls=false obj_id=0 layer=0
+world_portal x=736 y=192 normal_x=-1 normal_y=0.00000033776624 tangent_x=-0.00000033776624 tangent_y=-1 width=464 portal_id=2 receiver_id=1 priority=0 scale=1 scale_objects=false seamless=true seamless_depth=256 seamless_angle=180 seamless_rely_on_walls=false obj_id=0 layer=0

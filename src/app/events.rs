@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 // Winit callback layer; behavior is routed to input/frame modules.
 use glam::Vec2;
-use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
@@ -10,6 +9,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::app::{App, AppMode};
+use crate::render::backend::RenderBackend;
 use crate::settings::{DisplayMode, Resolution};
 
 impl ApplicationHandler for App {
@@ -32,26 +32,18 @@ impl ApplicationHandler for App {
         };
         self.settings
             .set_resolutions(available_resolutions(window.as_ref()));
-        let context = match Context::new(window.clone()) {
-            Ok(context) => context,
+        let render_backend = match RenderBackend::new(window.clone()) {
+            Ok(backend) => backend,
             Err(err) => {
-                eprintln!("Failed to create the rendering context: {err}");
+                eprintln!("Failed to create the rendering backend: {err}");
                 event_loop.exit();
                 return;
             }
         };
-        let surface = match Surface::new(&context, window.clone()) {
-            Ok(surface) => surface,
-            Err(err) => {
-                eprintln!("Failed to create the rendering surface: {err}");
-                event_loop.exit();
-                return;
-            }
-        };
+        eprintln!("Render backend: {}", render_backend.label());
 
         self.window = Some(window);
-        self.context = Some(context);
-        self.surface = Some(surface);
+        self.render_backend = Some(render_backend);
     }
 
     fn window_event(
