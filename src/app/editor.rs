@@ -3,14 +3,25 @@ use std::collections::VecDeque;
 use glam::Vec2;
 use winit::keyboard::KeyCode;
 
+mod clipboard;
+mod selection;
+mod types;
+
 // Editor stores mode state and applies commands to level objects.
 use crate::constants::PORTAL_WIDTH;
 use crate::game::enemy::Enemy;
 use crate::game::level::{
-    Checkpoint, Door, Hazard, Level, LevelObjectKind, LevelText, LevelTrigger, LevelTriggerKind,
-    ObjectMeta, Solid, WorldPortal,
+    Checkpoint, Door, Hazard, Level, LevelText, LevelTrigger, LevelTriggerKind, ObjectMeta, Solid,
+    WorldPortal,
 };
 
+use self::clipboard::{EditorClipboard, EditorClipboardItem, clipboard_bounds};
+use self::selection::{
+    SelectionBuckets, apply_clipboard_meta, offset_u16, offset_u16_min, selection_bounds,
+    selection_object_key, selection_sort_key, world_portal_bounds,
+};
+pub(super) use self::types::{EditorCategory, EditorMode, EditorSelectionKind, EditorTool};
+use self::types::{EditorPan, LevelSnapshot};
 use super::editor_geometry::{
     EditorDrag, EditorMoveStart, EditorSelection, SolidHit, drag_from_hit, rect_intersects_rect,
     resized_local_bounds, selection_rect, snap, snap_angle, snap_delta, solid_at,
@@ -1740,490 +1751,6 @@ fn place_rect(center: Vec2, size: Vec2, grid_snap: bool) -> Vec2 {
     maybe_snap(center - size / 2.0, grid_snap)
 }
 
-#[derive(Clone, PartialEq)]
-struct LevelSnapshot {
-    solids: Vec<Solid>,
-    doors: Vec<Door>,
-    hazards: Vec<Hazard>,
-    checkpoints: Vec<Checkpoint>,
-    enemies: Vec<Enemy>,
-    triggers: Vec<LevelTrigger>,
-    texts: Vec<LevelText>,
-    world_portals: Vec<WorldPortal>,
-    metadata: Vec<crate::game::level::LevelObjectMeta>,
-}
-
-#[derive(Clone)]
-struct EditorClipboardItem {
-    object: EditorClipboard,
-    meta: ObjectMeta,
-}
-
-#[derive(Clone)]
-enum EditorClipboard {
-    Solid(Solid),
-    Door(Door),
-    Hazard(Hazard),
-    Checkpoint(Checkpoint),
-    Enemy(Enemy),
-    Trigger(LevelTrigger),
-    Text(LevelText),
-    WorldPortal(WorldPortal),
-}
-
-#[derive(Default)]
-struct EditorPan {
-    left: bool,
-    right: bool,
-    up: bool,
-    down: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum EditorCategory {
-    Building,
-    Utility,
-    Enemy,
-    Triggers,
-    Deco,
-}
-
-impl EditorCategory {
-    pub(super) const COUNT: usize = 5;
-
-    pub(super) fn index(self) -> usize {
-        match self {
-            Self::Building => 0,
-            Self::Utility => 1,
-            Self::Enemy => 2,
-            Self::Triggers => 3,
-            Self::Deco => 4,
-        }
-    }
-
-    pub(super) fn from_index(index: usize) -> Option<Self> {
-        match index {
-            0 => Some(Self::Building),
-            1 => Some(Self::Utility),
-            2 => Some(Self::Enemy),
-            3 => Some(Self::Triggers),
-            4 => Some(Self::Deco),
-            _ => None,
-        }
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Building => "BUILDING",
-            Self::Utility => "UTILITY",
-            Self::Enemy => "ENEMY",
-            Self::Triggers => "TRIGGERS",
-            Self::Deco => "DECO",
-        }
-    }
-
-    pub(super) fn tools(self) -> &'static [EditorTool] {
-        match self {
-            Self::Building => &[
-                EditorTool::Portalable,
-                EditorTool::Solid,
-                EditorTool::Hazard,
-            ],
-            Self::Utility => &[
-                EditorTool::Door,
-                EditorTool::Checkpoint,
-                EditorTool::WorldPortal,
-                EditorTool::Text,
-            ],
-            Self::Enemy => &[EditorTool::Filth],
-            Self::Triggers => &[
-                EditorTool::LevelStart,
-                EditorTool::LevelEnd,
-                EditorTool::EnemySpawnTrigger,
-            ],
-            Self::Deco => &[],
-        }
-    }
-
-    pub(super) fn contains_tool(self, tool: EditorTool) -> bool {
-        self.tools().contains(&tool)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorTool {
-    Portalable,
-    Solid,
-    Hazard,
-    Door,
-    Checkpoint,
-    WorldPortal,
-    Text,
-    Filth,
-    LevelStart,
-    LevelEnd,
-    EnemySpawnTrigger,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorMode {
-    Build,
-    Edit,
-    Delete,
-}
-
-impl EditorMode {
-    pub(super) const COUNT: usize = 3;
-
-    pub(super) fn index(self) -> usize {
-        match self {
-            Self::Build => 0,
-            Self::Edit => 1,
-            Self::Delete => 2,
-        }
-    }
-
-    pub(super) fn from_index(index: usize) -> Option<Self> {
-        match index {
-            0 => Some(Self::Build),
-            1 => Some(Self::Edit),
-            2 => Some(Self::Delete),
-            _ => None,
-        }
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Build => "BUILD",
-            Self::Edit => "EDIT",
-            Self::Delete => "DELETE",
-        }
-    }
-}
-
-impl EditorTool {
-    pub(super) fn portalable(self) -> bool {
-        matches!(self, Self::Portalable)
-    }
-
-    pub(super) fn category(self) -> EditorCategory {
-        match self {
-            Self::Portalable | Self::Solid | Self::Hazard => EditorCategory::Building,
-            Self::Door | Self::Checkpoint | Self::WorldPortal | Self::Text => {
-                EditorCategory::Utility
-            }
-            Self::Filth => EditorCategory::Enemy,
-            Self::LevelStart | Self::LevelEnd | Self::EnemySpawnTrigger => EditorCategory::Triggers,
-        }
-    }
-
-    pub(super) fn index(self) -> usize {
-        match self {
-            Self::Portalable => 1,
-            Self::Solid => 2,
-            Self::Hazard => 3,
-            Self::Door => 4,
-            Self::Checkpoint => 5,
-            Self::WorldPortal => 6,
-            Self::Text => 7,
-            Self::Filth => 8,
-            Self::LevelStart => 9,
-            Self::LevelEnd => 10,
-            Self::EnemySpawnTrigger => 11,
-        }
-    }
-
-    pub(super) fn from_index(index: usize) -> Option<Self> {
-        match index {
-            1 => Some(Self::Portalable),
-            2 => Some(Self::Solid),
-            3 => Some(Self::Hazard),
-            4 => Some(Self::Door),
-            5 => Some(Self::Checkpoint),
-            6 => Some(Self::WorldPortal),
-            7 => Some(Self::Text),
-            8 => Some(Self::Filth),
-            9 => Some(Self::LevelStart),
-            10 => Some(Self::LevelEnd),
-            11 => Some(Self::EnemySpawnTrigger),
-            _ => None,
-        }
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Portalable => "P SURF",
-            Self::Solid => "SURFACE",
-            Self::Hazard => "ACID",
-            Self::Door => "DOOR",
-            Self::Checkpoint => "CHECK",
-            Self::WorldPortal => "W PORT",
-            Self::Text => "TEXT",
-            Self::Filth => "FILTH",
-            Self::LevelStart => "START",
-            Self::LevelEnd => "END",
-            Self::EnemySpawnTrigger => "SPAWN",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum EditorSelectionKind {
-    None,
-    Solid,
-    Door,
-    Hazard,
-    Checkpoint,
-    Enemy,
-    Trigger,
-    Text,
-    WorldPortal,
-}
-
-impl EditorSelectionKind {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::None => "NONE",
-            Self::Solid => "SOLID",
-            Self::Door => "DOOR",
-            Self::Hazard => "ACID",
-            Self::Checkpoint => "CHECKPOINT",
-            Self::Enemy => "FILTH",
-            Self::Trigger => "TRIGGER",
-            Self::Text => "TEXT",
-            Self::WorldPortal => "WORLD PORTAL",
-        }
-    }
-}
-
-fn remove_indices<T>(items: &mut Vec<T>, mut indices: Vec<usize>) {
-    indices.sort_unstable_by(|a, b| b.cmp(a));
-    indices.dedup();
-    for index in indices {
-        items.remove(index);
-    }
-}
-
-#[derive(Default)]
-struct SelectionBuckets {
-    solids: Vec<usize>,
-    doors: Vec<usize>,
-    hazards: Vec<usize>,
-    checkpoints: Vec<usize>,
-    enemies: Vec<usize>,
-    triggers: Vec<usize>,
-    texts: Vec<usize>,
-    world_portals: Vec<usize>,
-}
-
-impl SelectionBuckets {
-    fn from_selected(selected: impl IntoIterator<Item = EditorSelection>) -> Self {
-        let mut buckets = Self::default();
-
-        for selection in selected {
-            buckets.push(selection);
-        }
-
-        buckets
-    }
-
-    fn push(&mut self, selection: EditorSelection) {
-        match selection {
-            EditorSelection::Solid(index) => self.solids.push(index),
-            EditorSelection::Door(index) => self.doors.push(index),
-            EditorSelection::Hazard(index) => self.hazards.push(index),
-            EditorSelection::Checkpoint(index) => self.checkpoints.push(index),
-            EditorSelection::Enemy(index) => self.enemies.push(index),
-            EditorSelection::Trigger(index) => self.triggers.push(index),
-            EditorSelection::Text(index) => self.texts.push(index),
-            EditorSelection::WorldPortal(index) => self.world_portals.push(index),
-        }
-    }
-
-    fn remove_metadata_from(&self, level: &mut Level) {
-        level.remove_object_metadata(LevelObjectKind::Solid, &self.solids);
-        level.remove_object_metadata(LevelObjectKind::Door, &self.doors);
-        level.remove_object_metadata(LevelObjectKind::Hazard, &self.hazards);
-        level.remove_object_metadata(LevelObjectKind::Checkpoint, &self.checkpoints);
-        level.remove_object_metadata(LevelObjectKind::Enemy, &self.enemies);
-        level.remove_object_metadata(LevelObjectKind::Trigger, &self.triggers);
-        level.remove_object_metadata(LevelObjectKind::Text, &self.texts);
-        level.remove_object_metadata(LevelObjectKind::WorldPortal, &self.world_portals);
-    }
-
-    fn remove_from(self, level: &mut Level) {
-        remove_indices(&mut level.solids, self.solids);
-        remove_indices(&mut level.doors, self.doors);
-        remove_indices(&mut level.hazards, self.hazards);
-        remove_indices(&mut level.checkpoints, self.checkpoints);
-        remove_indices(&mut level.enemies, self.enemies);
-        remove_indices(&mut level.triggers, self.triggers);
-        remove_indices(&mut level.texts, self.texts);
-        remove_indices(&mut level.world_portals, self.world_portals);
-    }
-}
-
-fn selection_sort_key(selection: &EditorSelection) -> (usize, usize) {
-    match selection {
-        EditorSelection::Solid(index) => (0, *index),
-        EditorSelection::Door(index) => (1, *index),
-        EditorSelection::Hazard(index) => (2, *index),
-        EditorSelection::Checkpoint(index) => (3, *index),
-        EditorSelection::Enemy(index) => (4, *index),
-        EditorSelection::Trigger(index) => (5, *index),
-        EditorSelection::Text(index) => (6, *index),
-        EditorSelection::WorldPortal(index) => (7, *index),
-    }
-}
-
-fn selection_object_key(selection: EditorSelection) -> (LevelObjectKind, usize) {
-    match selection {
-        EditorSelection::Solid(index) => (LevelObjectKind::Solid, index),
-        EditorSelection::Door(index) => (LevelObjectKind::Door, index),
-        EditorSelection::Hazard(index) => (LevelObjectKind::Hazard, index),
-        EditorSelection::Checkpoint(index) => (LevelObjectKind::Checkpoint, index),
-        EditorSelection::Enemy(index) => (LevelObjectKind::Enemy, index),
-        EditorSelection::Trigger(index) => (LevelObjectKind::Trigger, index),
-        EditorSelection::Text(index) => (LevelObjectKind::Text, index),
-        EditorSelection::WorldPortal(index) => (LevelObjectKind::WorldPortal, index),
-    }
-}
-
-fn apply_clipboard_meta(level: &mut Level, selection: EditorSelection, meta: ObjectMeta) {
-    if meta == ObjectMeta::default() {
-        return;
-    }
-    let (kind, index) = selection_object_key(selection);
-    level.set_object_meta(kind, index, meta);
-}
-
-fn selection_bounds(level: &Level, selected: &[EditorSelection]) -> (Vec2, Vec2) {
-    let mut min = Vec2::splat(f32::INFINITY);
-    let mut max = Vec2::splat(f32::NEG_INFINITY);
-
-    for selection in selected {
-        match *selection {
-            EditorSelection::Solid(index) => {
-                if let Some(solid) = level.solids.get(index) {
-                    include_solid_bounds(*solid, &mut min, &mut max);
-                }
-            }
-            EditorSelection::Door(index) => {
-                if let Some(door) = level.doors.get(index) {
-                    include_solid_bounds(door.solid, &mut min, &mut max);
-                }
-            }
-            EditorSelection::Hazard(index) => {
-                if let Some(hazard) = level.hazards.get(index) {
-                    include_solid_bounds(hazard.solid, &mut min, &mut max);
-                }
-            }
-            EditorSelection::Checkpoint(index) => {
-                if let Some(checkpoint) = level.checkpoints.get(index) {
-                    include_solid_bounds(checkpoint.solid, &mut min, &mut max);
-                }
-            }
-            EditorSelection::Enemy(index) => {
-                if let Some(enemy) = level.enemies.get(index) {
-                    include_solid_bounds(enemy.spawn_solid(), &mut min, &mut max);
-                }
-            }
-            EditorSelection::Trigger(index) => {
-                if let Some(trigger) = level.triggers.get(index) {
-                    include_solid_bounds(trigger.solid, &mut min, &mut max);
-                }
-            }
-            EditorSelection::Text(index) => {
-                if let Some(text) = level.texts.get(index) {
-                    let (pos, size) = text_bounds(text);
-                    min = min.min(pos);
-                    max = max.max(pos + size);
-                }
-            }
-            EditorSelection::WorldPortal(index) => {
-                if let Some(portal) = level.world_portals.get(index) {
-                    let (portal_min, portal_max) = world_portal_bounds(*portal);
-                    min = min.min(portal_min);
-                    max = max.max(portal_max);
-                }
-            }
-        }
-    }
-
-    (min, max)
-}
-
-fn include_solid_bounds(solid: Solid, min: &mut Vec2, max: &mut Vec2) {
-    for corner in solid.corners() {
-        *min = min.min(corner);
-        *max = max.max(corner);
-    }
-}
-
-fn world_portal_bounds(portal: WorldPortal) -> (Vec2, Vec2) {
-    let corners = portal.edit_solid().corners();
-    let min = corners
-        .iter()
-        .copied()
-        .reduce(Vec2::min)
-        .unwrap_or(portal.center());
-    let max = corners
-        .iter()
-        .copied()
-        .reduce(Vec2::max)
-        .unwrap_or(portal.center());
-
-    (min, max)
-}
-
-fn offset_u16(value: u16, delta: i16) -> u16 {
-    if delta.is_negative() {
-        value.saturating_sub(delta.unsigned_abs())
-    } else {
-        value.saturating_add(delta as u16)
-    }
-}
-
-fn offset_u16_min(value: u16, delta: i16, min: u16) -> u16 {
-    offset_u16(value, delta).max(min)
-}
-
-fn clipboard_bounds(clipboard: &[EditorClipboardItem]) -> (Vec2, Vec2) {
-    let mut min = Vec2::splat(f32::INFINITY);
-    let mut max = Vec2::splat(f32::NEG_INFINITY);
-
-    for item in clipboard {
-        match &item.object {
-            EditorClipboard::Solid(solid) => include_solid_bounds(*solid, &mut min, &mut max),
-            EditorClipboard::Door(door) => include_solid_bounds(door.solid, &mut min, &mut max),
-            EditorClipboard::Hazard(hazard) => {
-                include_solid_bounds(hazard.solid, &mut min, &mut max)
-            }
-            EditorClipboard::Checkpoint(checkpoint) => {
-                include_solid_bounds(checkpoint.solid, &mut min, &mut max)
-            }
-            EditorClipboard::Enemy(enemy) => {
-                include_solid_bounds(enemy.spawn_solid(), &mut min, &mut max)
-            }
-            EditorClipboard::Trigger(trigger) => {
-                include_solid_bounds(trigger.solid, &mut min, &mut max)
-            }
-            EditorClipboard::Text(text) => {
-                let (pos, size) = text_bounds(text);
-                min = min.min(pos);
-                max = max.max(pos + size);
-            }
-            EditorClipboard::WorldPortal(portal) => {
-                let (portal_min, portal_max) = world_portal_bounds(*portal);
-                min = min.min(portal_min);
-                max = max.max(portal_max);
-            }
-        }
-    }
-
-    (min, max)
-}
-
 fn key_char(code: KeyCode, shift: bool) -> Option<char> {
     match code {
         KeyCode::Space => Some(' '),
@@ -2275,5 +1802,48 @@ fn key_char(code: KeyCode, shift: bool) -> Option<char> {
         KeyCode::KeyY => Some('Y'),
         KeyCode::KeyZ => Some('Z'),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::level::LevelObjectKind;
+
+    #[test]
+    fn duplicate_selected_preserves_object_metadata() {
+        let mut editor = Editor::new();
+        let mut level = Level::empty();
+
+        editor.create_block(Vec2::new(128.0, 128.0), EditorTool::Solid, &mut level);
+        assert!(editor.adjust_selected_object_meta(&mut level, 3, 2));
+        editor.duplicate_selected(&mut level);
+
+        assert_eq!(level.solids.len(), 2);
+        assert_eq!(
+            level.object_meta(LevelObjectKind::Solid, 1),
+            ObjectMeta { id: 3, layer: 2 }
+        );
+    }
+
+    #[test]
+    fn delete_selected_shifts_surviving_metadata() {
+        let mut editor = Editor::new();
+        let mut level = Level {
+            solids: vec![
+                Solid::new(0.0, 0.0, 32.0, 32.0, false),
+                Solid::new(64.0, 0.0, 32.0, 32.0, false),
+            ],
+            ..Level::empty()
+        };
+        level.set_object_meta(LevelObjectKind::Solid, 0, ObjectMeta { id: 1, layer: 0 });
+        level.set_object_meta(LevelObjectKind::Solid, 1, ObjectMeta { id: 2, layer: 4 });
+        editor.set_single_selection(EditorSelection::Solid(0));
+
+        editor.delete_selected(&mut level);
+
+        assert_eq!(level.solids.len(), 1);
+        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).id, 2);
+        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).layer, 4);
     }
 }

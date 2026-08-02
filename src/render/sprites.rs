@@ -121,12 +121,22 @@ pub(super) struct SpriteAsset {
     pivot: SpritePivot,
 }
 
-impl SpriteAsset {
-    const fn raw_rgba(
+#[derive(Clone, Copy, Debug)]
+struct SpriteAssetSpec {
+    id: SpriteId,
+    label: &'static str,
+    source_path: &'static str,
+    usage: SpriteUsage,
+    size: SpriteSize,
+    frames: &'static [SpriteFrame],
+    pivot: SpritePivot,
+}
+
+impl SpriteAssetSpec {
+    const fn new(
         id: SpriteId,
         label: &'static str,
         source_path: &'static str,
-        bytes: &'static [u8],
         usage: SpriteUsage,
         size: SpriteSize,
         frames: &'static [SpriteFrame],
@@ -136,32 +146,38 @@ impl SpriteAsset {
             id,
             label,
             source_path,
-            source: SpriteSource::RawRgba(bytes),
             usage,
             size,
             frames,
             pivot,
         }
     }
+}
 
-    const fn planned_sheet(
-        id: SpriteId,
-        label: &'static str,
-        source_path: &'static str,
-        usage: SpriteUsage,
-        size: SpriteSize,
-        frames: &'static [SpriteFrame],
-        pivot: SpritePivot,
-    ) -> Self {
+impl SpriteAsset {
+    const fn raw_rgba(spec: SpriteAssetSpec, bytes: &'static [u8]) -> Self {
         Self {
-            id,
-            label,
-            source_path,
+            id: spec.id,
+            label: spec.label,
+            source_path: spec.source_path,
+            source: SpriteSource::RawRgba(bytes),
+            usage: spec.usage,
+            size: spec.size,
+            frames: spec.frames,
+            pivot: spec.pivot,
+        }
+    }
+
+    const fn planned_sheet(spec: SpriteAssetSpec) -> Self {
+        Self {
+            id: spec.id,
+            label: spec.label,
+            source_path: spec.source_path,
             source: SpriteSource::PlannedSheet,
-            usage,
-            size,
-            frames,
-            pivot,
+            usage: spec.usage,
+            size: spec.size,
+            frames: spec.frames,
+            pivot: spec.pivot,
         }
     }
 
@@ -277,61 +293,71 @@ const PORTAL_FRAMES: [SpriteFrame; 4] = [
 const WORLD_PROP_FRAMES: [SpriteFrame; 1] = [SpriteFrame::new("single", 0, 0, 128, 128, 0)];
 
 pub(super) const MENU_V1: SpriteAsset = SpriteAsset::raw_rgba(
-    SpriteId::MenuV1,
-    "menu_v1",
-    "assets/images/menu_v1.rgba",
+    SpriteAssetSpec::new(
+        SpriteId::MenuV1,
+        "menu_v1",
+        "assets/images/menu_v1.rgba",
+        SpriteUsage::Ui,
+        SpriteSize::square(760),
+        &MENU_V1_FRAMES,
+        SpritePivot::CENTER,
+    ),
     include_bytes!("../../assets/images/menu_v1.rgba"),
-    SpriteUsage::Ui,
-    SpriteSize::square(760),
-    &MENU_V1_FRAMES,
-    SpritePivot::CENTER,
 );
 
 pub(super) const PIERCER_HUD: SpriteAsset = SpriteAsset::raw_rgba(
-    SpriteId::PiercerHud,
-    "piercer_hud",
-    "assets/images/hud/PiercerHUDNew.rgba",
+    SpriteAssetSpec::new(
+        SpriteId::PiercerHud,
+        "piercer_hud",
+        "assets/images/hud/PiercerHUDNew.rgba",
+        SpriteUsage::Ui,
+        SpriteSize::new(550, 268),
+        &PIERCER_HUD_FRAMES,
+        SpritePivot::TOP_LEFT,
+    ),
     include_bytes!("../../assets/images/hud/PiercerHUDNew.rgba"),
-    SpriteUsage::Ui,
-    SpriteSize::new(550, 268),
-    &PIERCER_HUD_FRAMES,
-    SpritePivot::TOP_LEFT,
 );
 
 pub(super) const DEATH_SKULL_1: SpriteAsset = SpriteAsset::raw_rgba(
-    SpriteId::DeathSkull1,
-    "death_skull_1",
-    "assets/images/death/DeathScreenSkull1.rgba",
+    SpriteAssetSpec::new(
+        SpriteId::DeathSkull1,
+        "death_skull_1",
+        "assets/images/death/DeathScreenSkull1.rgba",
+        SpriteUsage::Ui,
+        SpriteSize::new(1637, 1636),
+        &DEATH_SKULL_1_FRAMES,
+        SpritePivot::CENTER,
+    ),
     include_bytes!("../../assets/images/death/DeathScreenSkull1.rgba"),
-    SpriteUsage::Ui,
-    SpriteSize::new(1637, 1636),
-    &DEATH_SKULL_1_FRAMES,
-    SpritePivot::CENTER,
 );
 
 pub(super) const DEATH_SKULL_2: SpriteAsset = SpriteAsset::raw_rgba(
-    SpriteId::DeathSkull2,
-    "death_skull_2",
-    "assets/images/death/DeathScreenSkull2.rgba",
+    SpriteAssetSpec::new(
+        SpriteId::DeathSkull2,
+        "death_skull_2",
+        "assets/images/death/DeathScreenSkull2.rgba",
+        SpriteUsage::Ui,
+        SpriteSize::new(1637, 1636),
+        &DEATH_SKULL_2_FRAMES,
+        SpritePivot::CENTER,
+    ),
     include_bytes!("../../assets/images/death/DeathScreenSkull2.rgba"),
-    SpriteUsage::Ui,
-    SpriteSize::new(1637, 1636),
-    &DEATH_SKULL_2_FRAMES,
-    SpritePivot::CENTER,
 );
 
 pub(super) const DEATH_SHUTDOWN_FLASH: SpriteAsset = SpriteAsset::raw_rgba(
-    SpriteId::DeathShutdownFlash,
-    "death_shutdown_flash",
-    "assets/images/death/ISeeYou.rgba",
+    SpriteAssetSpec::new(
+        SpriteId::DeathShutdownFlash,
+        "death_shutdown_flash",
+        "assets/images/death/ISeeYou.rgba",
+        SpriteUsage::Fullscreen,
+        SpriteSize::new(480, 270),
+        &DEATH_SHUTDOWN_FLASH_FRAMES,
+        SpritePivot::TOP_LEFT,
+    ),
     include_bytes!("../../assets/images/death/ISeeYou.rgba"),
-    SpriteUsage::Fullscreen,
-    SpriteSize::new(480, 270),
-    &DEATH_SHUTDOWN_FLASH_FRAMES,
-    SpritePivot::TOP_LEFT,
 );
 
-const PLAYER_BASE: SpriteAsset = SpriteAsset::planned_sheet(
+const PLAYER_BASE: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::PlayerBase,
     "player_base",
     "assets/images/sprites/player_base.rgba",
@@ -339,9 +365,9 @@ const PLAYER_BASE: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(512, 640),
     &PLAYER_BASE_FRAMES,
     SpritePivot::BOTTOM_CENTER,
-);
+));
 
-const ENEMY_WEAK: SpriteAsset = SpriteAsset::planned_sheet(
+const ENEMY_WEAK: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::EnemyWeak,
     "enemy_weak",
     "assets/images/sprites/enemy_weak.rgba",
@@ -349,9 +375,9 @@ const ENEMY_WEAK: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(512, 384),
     &ENEMY_WEAK_FRAMES,
     SpritePivot::BOTTOM_CENTER,
-);
+));
 
-const PORTAL_BLUE: SpriteAsset = SpriteAsset::planned_sheet(
+const PORTAL_BLUE: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::PortalBlue,
     "portal_blue",
     "assets/images/sprites/portal_blue.rgba",
@@ -359,9 +385,9 @@ const PORTAL_BLUE: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(256, 160),
     &PORTAL_FRAMES,
     SpritePivot::CENTER,
-);
+));
 
-const PORTAL_ORANGE: SpriteAsset = SpriteAsset::planned_sheet(
+const PORTAL_ORANGE: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::PortalOrange,
     "portal_orange",
     "assets/images/sprites/portal_orange.rgba",
@@ -369,9 +395,9 @@ const PORTAL_ORANGE: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(256, 160),
     &PORTAL_FRAMES,
     SpritePivot::CENTER,
-);
+));
 
-const DOOR_PANEL: SpriteAsset = SpriteAsset::planned_sheet(
+const DOOR_PANEL: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::DoorPanel,
     "door_panel",
     "assets/images/sprites/door_panel.rgba",
@@ -379,9 +405,9 @@ const DOOR_PANEL: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(128, 128),
     &WORLD_PROP_FRAMES,
     SpritePivot::CENTER,
-);
+));
 
-const HAZARD: SpriteAsset = SpriteAsset::planned_sheet(
+const HAZARD: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::Hazard,
     "hazard",
     "assets/images/sprites/hazard.rgba",
@@ -389,9 +415,9 @@ const HAZARD: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(128, 128),
     &WORLD_PROP_FRAMES,
     SpritePivot::CENTER,
-);
+));
 
-const CHECKPOINT: SpriteAsset = SpriteAsset::planned_sheet(
+const CHECKPOINT: SpriteAsset = SpriteAsset::planned_sheet(SpriteAssetSpec::new(
     SpriteId::Checkpoint,
     "checkpoint",
     "assets/images/sprites/checkpoint.rgba",
@@ -399,7 +425,7 @@ const CHECKPOINT: SpriteAsset = SpriteAsset::planned_sheet(
     SpriteSize::new(128, 128),
     &WORLD_PROP_FRAMES,
     SpritePivot::CENTER,
-);
+));
 
 pub(super) const SPRITE_ASSETS: &[SpriteAsset] = &[
     MENU_V1,

@@ -465,6 +465,7 @@ struct WgpuSpriteTexture {
     _bind_group: wgpu::BindGroup,
 }
 
+#[cfg(target_endian = "little")]
 fn pixels_as_bytes(pixels: &[u32]) -> &[u8] {
     let byte_len = std::mem::size_of_val(pixels);
 
@@ -474,6 +475,9 @@ fn pixels_as_bytes(pixels: &[u32]) -> &[u8] {
     // to the source slice lifetime.
     unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), byte_len) }
 }
+
+#[cfg(not(target_endian = "little"))]
+compile_error!("WGPU framebuffer upload expects little-endian 0x00RRGGBB pixel memory.");
 
 #[derive(Debug)]
 pub struct RenderBackendError {

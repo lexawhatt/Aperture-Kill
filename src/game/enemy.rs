@@ -5,6 +5,7 @@ use crate::constants::{
     FILTH_SPEED,
 };
 use crate::game::level::{CollisionGeometry, Solid};
+use crate::game::portal::Portal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnemyKind {
@@ -26,6 +27,17 @@ pub struct Enemy {
     pub attack_cooldown: f32,
     pub hurt_flash: f32,
     pub on_ground: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct EnemyUpdateContext<'a> {
+    pub dt: f32,
+    pub target_pos: Vec2,
+    pub can_attack: bool,
+    pub collision: CollisionGeometry<'a>,
+    pub portals: &'a [Portal],
+    pub speed_multiplier: f32,
+    pub damage_multiplier: f32,
 }
 
 impl Enemy {
@@ -123,29 +135,14 @@ impl Enemy {
         )
     }
 
-    pub fn update(
-        &mut self,
-        dt: f32,
-        target_pos: Vec2,
-        can_attack: bool,
-        collision: CollisionGeometry<'_>,
-        portals: &[crate::game::portal::Portal],
-        speed_multiplier: f32,
-        damage_multiplier: f32,
-    ) -> Option<f32> {
+    pub fn update(&mut self, context: EnemyUpdateContext<'_>) -> Option<f32> {
+        let dt = context.dt;
+
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt).max(0.0);
 
         match self.kind {
-            EnemyKind::Filth => self.update_filth(
-                dt,
-                target_pos,
-                can_attack,
-                collision,
-                portals,
-                speed_multiplier,
-                damage_multiplier,
-            ),
+            EnemyKind::Filth => self.update_filth(context),
         }
     }
 
@@ -160,41 +157,68 @@ impl Enemy {
         self.health <= 0.0
     }
 
-    fn update_filth(
-        &mut self,
-        dt: f32,
-        target_pos: Vec2,
-        can_attack: bool,
-        collision: CollisionGeometry<'_>,
-        portals: &[crate::game::portal::Portal],
-        speed_multiplier: f32,
-        damage_multiplier: f32,
-    ) -> Option<f32> {
+    fn update_filth(&mut self, context: EnemyUpdateContext<'_>) -> Option<f32> {
         self.prev_pos = self.pos;
 
-        let to_target = target_pos - self.pos;
+        let to_target = context.target_pos - self.pos;
         let dir_x = if to_target.x.abs() > 2.0 {
             to_target.x.signum()
         } else {
             0.0
         };
 
-        self.vel.x = dir_x * FILTH_SPEED * speed_multiplier.max(0.0);
-        self.vel.y += crate::constants::GRAVITY * dt;
-        self.pos += self.vel * dt;
+        self.vel.x = dir_x * FILTH_SPEED * context.speed_multiplier.max(0.0);
+        self.vel.y += crate::constants::GRAVITY * context.dt;
+        self.pos += self.vel * context.dt;
         let half_size = self.half_size();
-        self.on_ground = collision.resolve_actor_body_with_portals(
+        self.on_ground = context.collision.resolve_actor_body_with_portals(
             &mut self.pos,
             half_size,
             &mut self.vel,
-            portals,
+            context.portals,
         );
 
-        if can_attack && to_target.length() <= FILTH_ATTACK_RANGE && self.attack_cooldown <= 0.0 {
+        if context.can_attack
+            && to_target.length() <= FILTH_ATTACK_RANGE
+            && self.attack_cooldown <= 0.0
+        {
             self.attack_cooldown = FILTH_ATTACK_COOLDOWN;
-            return Some(FILTH_ATTACK_DAMAGE * damage_multiplier.max(0.0));
+            return Some(FILTH_ATTACK_DAMAGE * context.damage_multiplier.max(0.0));
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::level::Level;
+
+    #[test]
+    fn filth_attack_respects_cooldown() {
+        let level = Level {
+            solids: vec![Solid::new(0.0, 200.0, 420.0, 24.0, false)],
+            ..Level::empty()
+        };
+        let portals = [];
+        let collision = CollisionGeometry::new(&level.solids, &level.doors);
+        let mut enemy = Enemy::filth(100.0, 171.0);
+        let context = EnemyUpdateContext {
+            dt: 1.0 / 60.0,
+            target_pos: Vec2::new(120.0, 171.0),
+            can_attack: true,
+            collision,
+            portals: &portals,
+            speed_multiplier: 1.0,
+            damage_multiplier: 1.0,
+        };
+
+        let first_attack = enemy.update(context);
+        let second_attack = enemy.update(context);
+
+        assert!(first_attack.is_some_and(|damage| damage > 0.0));
+        assert!(second_attack.is_none());
+        assert!(enemy.attack_cooldown > 0.0);
     }
 }

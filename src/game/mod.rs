@@ -19,6 +19,7 @@ use crate::constants::{
     PLAYER_MAX_HEALTH, PORTAL_MIN_DISTANCE, PORTAL_SURFACE_OFFSET, PORTAL_WIDTH,
 };
 pub use crate::game::difficulty::Difficulty;
+use crate::game::enemy::EnemyUpdateContext;
 use crate::game::level::{CollisionGeometry, DoorEvent, Level, LevelTriggerKind, WorldPortal};
 use crate::game::levels::LevelSpec;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
@@ -740,15 +741,17 @@ impl World {
                 continue;
             }
 
-            if let Some(amount) = enemy.update(
+            let context = EnemyUpdateContext {
                 dt,
-                target.pos,
-                target.can_attack,
+                target_pos: target.pos,
+                can_attack: target.can_attack,
                 collision,
-                &collision_portals,
-                enemy_speed,
-                enemy_damage,
-            ) {
+                portals: &collision_portals,
+                speed_multiplier: enemy_speed,
+                damage_multiplier: enemy_damage,
+            };
+
+            if let Some(amount) = enemy.update(context) {
                 damage += amount;
                 self.sound_events.push(SoundEvent::FilthBite(enemy.pos));
             }

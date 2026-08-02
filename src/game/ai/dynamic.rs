@@ -49,6 +49,24 @@ struct PortalNavEdge {
     cost: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SurfaceRouteRequest {
+    start_surface: usize,
+    start_x: f32,
+    target_surface: usize,
+    target_x: f32,
+    half_width: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NavRelax {
+    current_pos: usize,
+    next_pos: usize,
+    first_step_x: f32,
+    next_x: f32,
+    cost: f32,
+}
+
 pub(in crate::game) fn enemy_targets(
     level: &Level,
     enemies: &[Enemy],
@@ -257,11 +275,13 @@ fn enemy_route_target(
     let route = surface_route_next_x(
         surfaces,
         portal_edges,
-        start_surface,
-        enemy_pos.x,
-        target_surface,
-        player_pos.x,
-        enemy_half_size.x,
+        SurfaceRouteRequest {
+            start_surface,
+            start_x: enemy_pos.x,
+            target_surface,
+            target_x: player_pos.x,
+            half_width: enemy_half_size.x,
+        },
     )?;
 
     let route_target = Vec2::new(route.0, enemy_pos.y);
@@ -322,11 +342,7 @@ fn nav_surface_at(surfaces: &[NavSurface], pos: Vec2, half_size: Vec2) -> Option
 fn surface_route_next_x(
     surfaces: &[NavSurface],
     portal_edges: &[PortalNavEdge],
-    start_surface: usize,
-    start_x: f32,
-    target_surface: usize,
-    target_x: f32,
-    half_width: f32,
+    request: SurfaceRouteRequest,
 ) -> Option<(f32, f32)> {
     let mut states = vec![
         NavState {
@@ -338,10 +354,10 @@ fn surface_route_next_x(
         surfaces.len()
     ];
 
-    states[start_surface] = NavState {
+    states[request.start_surface] = NavState {
         cost: 0.0,
-        x: start_x,
-        first_x: start_x,
+        x: request.start_x,
+        first_x: request.start_x,
         visited: false,
     };
 
@@ -352,9 +368,9 @@ fn surface_route_next_x(
         .min_by(|(_, a), (_, b)| a.cost.total_cmp(&b.cost))
         .map(|(index, _)| index)
     {
-        if current_pos == target_surface {
+        if current_pos == request.target_surface {
             let state = states[current_pos];
-            let cost = state.cost + (target_x - state.x).abs();
+            let cost = state.cost + (request.target_x - state.x).abs();
 
             return Some((state.first_x, cost));
         }
@@ -365,9 +381,9 @@ fn surface_route_next_x(
 
         for direction in [-1.0, 1.0] {
             let edge_x = if direction < 0.0 {
-                current.min_x - half_width - NAV_EDGE_MARGIN
+                current.min_x - request.half_width - NAV_EDGE_MARGIN
             } else {
-                current.max_x + half_width + NAV_EDGE_MARGIN
+                current.max_x + request.half_width + NAV_EDGE_MARGIN
             };
             let Some(next_pos) = drop_surface_below(surfaces, current_pos, edge_x) else {
                 continue;
@@ -379,12 +395,14 @@ fn surface_route_next_x(
 
             relax_nav_state(
                 &mut states,
-                current_pos,
-                next_pos,
-                edge_x,
-                edge_x,
-                cost,
-                start_surface,
+                NavRelax {
+                    current_pos,
+                    next_pos,
+                    first_step_x: edge_x,
+                    next_x: edge_x,
+                    cost,
+                },
+                request.start_surface,
             );
         }
 
@@ -396,12 +414,14 @@ fn surface_route_next_x(
 
             relax_nav_state(
                 &mut states,
-                current_pos,
-                edge.to_surface,
-                edge.from_x,
-                edge.to_x,
-                cost,
-                start_surface,
+                NavRelax {
+                    current_pos,
+                    next_pos: edge.to_surface,
+                    first_step_x: edge.from_x,
+                    next_x: edge.to_x,
+                    cost,
+                },
+                request.start_surface,
             );
         }
     }
@@ -409,26 +429,18 @@ fn surface_route_next_x(
     None
 }
 
-fn relax_nav_state(
-    states: &mut [NavState],
-    current_pos: usize,
-    next_pos: usize,
-    first_step_x: f32,
-    next_x: f32,
-    cost: f32,
-    start_surface: usize,
-) {
-    if cost >= states[next_pos].cost {
+fn relax_nav_state(states: &mut [NavState], step: NavRelax, start_surface: usize) {
+    if step.cost >= states[step.next_pos].cost {
         return;
     }
 
-    states[next_pos] = NavState {
-        cost,
-        x: next_x,
-        first_x: if current_pos == start_surface {
-            first_step_x
+    states[step.next_pos] = NavState {
+        cost: step.cost,
+        x: step.next_x,
+        first_x: if step.current_pos == start_surface {
+            step.first_step_x
         } else {
-            states[current_pos].first_x
+            states[step.current_pos].first_x
         },
         visited: false,
     };
@@ -615,4 +627,96 @@ fn enemy_overlap_push(a: &Enemy, b: &Enemy) -> Option<Vec2> {
     };
 
     Some(Vec2::new(overlap_x * dir, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::PORTAL_WIDTH;
+    use crate::game::portal::Color;
+
+    fn floor_level() -> Level {
+        Level {
+            solids: vec![Solid::new(0.0, 200.0, 420.0, 24.0, false)],
+            ..Level::empty()
+        }
+    }
+
+    fn only_target(level: &Level, enemy: Enemy, player_pos: Vec2) -> EnemyTarget {
+        let targets = enemy_targets(level, &[enemy], player_pos, &[]);
+
+        targets[0]
+    }
+
+    #[test]
+    fn inactive_enemy_keeps_idle_target() {
+        let level = Level::empty();
+        let enemy = Enemy::filth_spawn(120.0, 80.0, 1, 1);
+
+        let target = only_target(&level, enemy.clone(), Vec2::new(180.0, 80.0));
+
+        assert_eq!(target.pos, enemy.pos);
+        assert!(!target.can_attack);
+    }
+
+    #[test]
+    fn wall_blocked_player_does_not_become_target() {
+        let level = Level {
+            solids: vec![
+                Solid::new(0.0, 200.0, 420.0, 24.0, false),
+                Solid::new(190.0, 80.0, 24.0, 120.0, false),
+            ],
+            ..Level::empty()
+        };
+        let enemy = Enemy::filth(150.0, 171.0);
+
+        let target = only_target(&level, enemy.clone(), Vec2::new(260.0, 164.0));
+
+        assert_eq!(target.pos, enemy.pos);
+        assert!(!target.can_attack);
+    }
+
+    #[test]
+    fn visible_player_on_same_surface_is_attack_target() {
+        let level = floor_level();
+        let enemy = Enemy::filth(150.0, 171.0);
+        let player_pos = Vec2::new(260.0, 171.0);
+
+        let target = only_target(&level, enemy, player_pos);
+
+        assert_eq!(target.pos, player_pos);
+        assert!(target.can_attack);
+    }
+
+    #[test]
+    fn portal_route_returns_first_portal_waypoint() {
+        let level = Level {
+            solids: vec![
+                Solid::new(0.0, 200.0, 220.0, 24.0, false),
+                Solid::new(300.0, 100.0, 260.0, 24.0, false),
+            ],
+            ..Level::empty()
+        };
+        let enemy = Enemy::filth(150.0, 171.0);
+        let enemy_pos = enemy.pos;
+        let player_pos = Vec2::new(470.0, 64.0);
+        let lower_portal = Portal::new(50.0, 171.0, Vec2::new(1.0, 0.0), PORTAL_WIDTH, Color::BLUE);
+        let upper_portal = Portal::new(
+            350.0,
+            71.0,
+            Vec2::new(1.0, 0.0),
+            PORTAL_WIDTH,
+            Color::ORANGE,
+        );
+        let links = [PortalLink {
+            source: lower_portal,
+            destination: upper_portal,
+        }];
+
+        let targets = enemy_targets(&level, &[enemy], player_pos, &links);
+        let target = targets[0];
+
+        assert!(target.pos.x < enemy_pos.x);
+        assert!(!target.can_attack);
+    }
 }
