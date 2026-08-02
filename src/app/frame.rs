@@ -1,14 +1,14 @@
 use std::time::Instant;
 
 // Per-frame order: input, simulation/camera, then render.
-use crate::app::menu::difficulty_hit;
+use crate::app::menu::{difficulty_hit, pause_hit};
 use crate::app::{App, AppMode, MenuScreen};
 use crate::game::level::LevelTriggerKind;
 use crate::game::progression::{custom_level_indices, level_code};
 use crate::render::{
     DebugOverlay, EditorDoorInspector, EditorEnemyInspector, EditorEnemySpawnTriggerInspector,
     EditorInspector, EditorObjectMeta, EditorOverlay, EditorWorldPortalInspector, LevelMenuOverlay,
-    LevelMenuScreen, RenderMode, RenderScene,
+    LevelMenuScreen, PauseOverlay, RenderMode, RenderScene,
 };
 
 impl App {
@@ -55,7 +55,7 @@ impl App {
         match self.mode {
             AppMode::Playing => self.update_playing(dt, width, height),
             AppMode::Editor => self.update_editor(dt, width, height),
-            AppMode::LevelMenu | AppMode::Changelog | AppMode::Options => {}
+            AppMode::Pause | AppMode::LevelMenu | AppMode::Changelog | AppMode::Options => {}
         }
         self.sync_mode_audio();
     }
@@ -86,10 +86,18 @@ impl App {
 
     fn render_frame(&mut self, width: u32, height: u32) {
         let editor_overlay = (self.mode == AppMode::Editor).then(|| self.editor_overlay());
+        let pause_overlay =
+            (self.mode == AppMode::Pause).then(|| self.pause_overlay(width, height));
         let level_menu_overlay =
             (self.mode == AppMode::LevelMenu).then(|| self.level_menu_overlay(width, height));
         let render_mode = match self.mode {
             AppMode::Playing => RenderMode::Playing,
+            AppMode::Pause => {
+                let Some(overlay) = pause_overlay.as_ref() else {
+                    return;
+                };
+                RenderMode::Pause(overlay)
+            }
             AppMode::LevelMenu => {
                 let Some(overlay) = level_menu_overlay.as_ref() else {
                     return;
@@ -102,6 +110,7 @@ impl App {
                 active_tab: self.options_tab,
                 capture: self.binding_capture,
                 resolution_dropdown: self.resolution_dropdown,
+                dim_level_background: self.options_return_to_pause,
             },
             AppMode::Editor => {
                 let Some(overlay) = editor_overlay.as_ref() else {
@@ -293,6 +302,7 @@ impl App {
         Some(DebugOverlay {
             mode: match self.mode {
                 AppMode::Playing => "PLAY",
+                AppMode::Pause => "PAUSE",
                 AppMode::LevelMenu => "MENU",
                 AppMode::Changelog => "CHANGELOG",
                 AppMode::Options => "OPTIONS",
@@ -312,11 +322,17 @@ impl App {
         })
     }
 
+    fn pause_overlay(&self, width: u32, height: u32) -> PauseOverlay {
+        PauseOverlay {
+            keyboard_focus: self.pause_keyboard_focus.then_some(self.pause_cursor),
+            hover: pause_hit(self.cursor_screen, width as f32, height as f32),
+        }
+    }
+
     fn sync_mode_audio(&mut self) {
-        if matches!(
-            self.mode,
-            AppMode::LevelMenu | AppMode::Changelog | AppMode::Options
-        ) {
+        if matches!(self.mode, AppMode::LevelMenu | AppMode::Changelog)
+            || (self.mode == AppMode::Options && !self.options_return_to_pause)
+        {
             self.audio.start_menu_ambience();
         } else {
             self.audio.stop_menu_ambience();

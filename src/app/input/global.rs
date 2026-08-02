@@ -9,7 +9,7 @@ impl App {
         &mut self,
         code: KeyCode,
         down: bool,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
     ) -> bool {
         if !down {
             return false;
@@ -31,7 +31,7 @@ impl App {
                 true
             }
             KeyCode::Escape if self.mode == AppMode::Options => {
-                self.mode = AppMode::LevelMenu;
+                self.close_options();
                 true
             }
             KeyCode::Escape if self.mode == AppMode::Changelog => {
@@ -42,6 +42,10 @@ impl App {
                 self.menu_back();
                 true
             }
+            KeyCode::Escape if self.mode == AppMode::Pause => {
+                self.resume_from_pause();
+                true
+            }
             KeyCode::Escape if self.mode != AppMode::Playing => {
                 self.mode = AppMode::Playing;
                 self.camera.reset_zoom();
@@ -50,7 +54,7 @@ impl App {
                 true
             }
             KeyCode::Escape => {
-                event_loop.exit();
+                self.open_pause_menu();
                 true
             }
             _ => false,
@@ -65,10 +69,12 @@ impl App {
             self.mode,
             AppMode::LevelMenu | AppMode::Changelog | AppMode::Options
         ) {
+            self.options_return_to_pause = false;
             AppMode::Playing
         } else {
             self.input.release_gameplay();
             self.audio.stop_actions();
+            self.options_return_to_pause = false;
             AppMode::LevelMenu
         };
         true

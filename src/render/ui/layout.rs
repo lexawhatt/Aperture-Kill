@@ -32,12 +32,12 @@ pub(super) fn editor_tool_label(index: usize) -> &'static str {
     }
 }
 
-pub(super) fn solids_bounds(solids: &[Solid]) -> Option<(Vec2, Vec2)> {
+pub(super) fn indexed_solids_bounds(solids: &[Solid], indices: &[usize]) -> Option<(Vec2, Vec2)> {
     let mut min = Vec2::splat(f32::INFINITY);
     let mut max = Vec2::splat(f32::NEG_INFINITY);
     let mut any = false;
 
-    for solid in solids {
+    for solid in indices.iter().filter_map(|index| solids.get(*index)) {
         for corner in solid.corners() {
             min = min.min(corner);
             max = max.max(corner);
@@ -121,19 +121,6 @@ pub(super) fn red_failure_tint(raw: u32, intensity: f32, x: i32, y: i32, seed: i
     let r = (red + 88.0 * failure + noise * 0.45).clamp(0.0, 255.0) as u32;
     let g = (green * (1.0 - failure * 0.38) * scanline).clamp(0.0, 255.0) as u32;
     let b = (blue * (1.0 - failure * 0.52) * scanline).clamp(0.0, 255.0) as u32;
-
-    (r << 16) | (g << 8) | b
-}
-
-pub(super) fn red_damage_pulse(raw: u32, amount: f32) -> u32 {
-    let amount = amount.clamp(0.0, 1.0);
-    let red = ((raw >> 16) & 0xff) as f32;
-    let green = ((raw >> 8) & 0xff) as f32;
-    let blue = (raw & 0xff) as f32;
-
-    let r = (red + (255.0 - red) * amount * 0.72).clamp(0.0, 255.0) as u32;
-    let g = (green * (1.0 - amount * 0.62)).clamp(0.0, 255.0) as u32;
-    let b = (blue * (1.0 - amount * 0.72)).clamp(0.0, 255.0) as u32;
 
     (r << 16) | (g << 8) | b
 }

@@ -2,6 +2,7 @@ pub mod backend;
 mod canvas;
 mod glyphs;
 mod plan;
+mod sprites;
 mod text;
 mod ui;
 mod world;
@@ -29,6 +30,7 @@ pub struct Renderer;
 
 pub enum RenderMode<'a> {
     Playing,
+    Pause(&'a PauseOverlay),
     LevelMenu(&'a LevelMenuOverlay),
     Changelog,
     Options {
@@ -36,6 +38,7 @@ pub enum RenderMode<'a> {
         active_tab: OptionsTab,
         capture: Option<GameKey>,
         resolution_dropdown: bool,
+        dim_level_background: bool,
     },
     Editor(&'a EditorOverlay),
 }
@@ -59,6 +62,11 @@ pub struct LevelMenuOverlay {
     pub level_cursor: usize,
     pub available_level_codes: Vec<String>,
     pub custom_level_names: Vec<String>,
+}
+
+pub struct PauseOverlay {
+    pub keyboard_focus: Option<usize>,
+    pub hover: Option<usize>,
 }
 
 pub struct RenderScene<'data> {
@@ -196,6 +204,7 @@ impl Renderer {
 
         match mode {
             RenderMode::Playing => {}
+            RenderMode::Pause(pause) => canvas.pause_overlay(pause),
             RenderMode::LevelMenu(menu) => {
                 canvas.level_menu(menu);
             }
@@ -207,8 +216,15 @@ impl Renderer {
                 active_tab,
                 capture,
                 resolution_dropdown,
+                dim_level_background,
             } => {
-                canvas.options_menu(settings, active_tab, capture, resolution_dropdown);
+                canvas.options_menu(
+                    settings,
+                    active_tab,
+                    capture,
+                    resolution_dropdown,
+                    dim_level_background,
+                );
             }
             RenderMode::Editor(overlay) => canvas.editor_overlay(world, overlay),
         }

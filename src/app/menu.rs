@@ -15,6 +15,16 @@ pub(super) const SOCIAL_LINKS: [(&str, &str, &str); 3] = [
     ("GITHUB", "LEXAWHATT", "https://github.com/lexawhatt"),
 ];
 
+pub(super) const PAUSE_ACTION_COUNT: usize = 5;
+
+pub(super) fn pause_hit(pos: Vec2, width: f32, height: f32) -> Option<usize> {
+    (0..PAUSE_ACTION_COUNT).position(|index| {
+        let (button_pos, button_size) = pause_button_rect(index, width, height);
+
+        rect_hit(pos, button_pos, button_size)
+    })
+}
+
 pub(super) fn menu_hit(pos: Vec2, width: f32, height: f32) -> Option<usize> {
     let buttons = menu_buttons(width, height);
 
@@ -243,6 +253,22 @@ fn menu_buttons(width: f32, height: f32) -> [(Vec2, Vec2); 4] {
             button_size,
         ),
     ]
+}
+
+fn pause_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let size = Vec2::new(
+        (width * 0.17).clamp(220.0, 330.0),
+        (height * 0.052).clamp(42.0, 56.0),
+    );
+    let gap = (height * 0.018).clamp(12.0, 18.0);
+    let total_height = size.y * PAUSE_ACTION_COUNT as f32 + gap * (PAUSE_ACTION_COUNT - 1) as f32;
+    let top = (height * 0.5 - total_height * 0.5 + (height * 0.035).clamp(20.0, 38.0))
+        .clamp(132.0, (height - total_height - 34.0).max(132.0));
+
+    (
+        Vec2::new((width - size.x) * 0.5, top + index as f32 * (size.y + gap)),
+        size,
+    )
 }
 
 fn difficulty_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {

@@ -4,8 +4,8 @@ use winit::keyboard::KeyCode;
 
 // Level menu input is screen-space UI, not world-space editing.
 use crate::app::menu::{
-    chapter_hit, custom_level_hit, difficulty_hit, layer_level_hit, menu_hit, options_drag_volume,
-    options_hit, social_hit,
+    PAUSE_ACTION_COUNT, chapter_hit, custom_level_hit, difficulty_hit, layer_level_hit, menu_hit,
+    options_drag_volume, options_hit, pause_hit, social_hit,
 };
 use crate::app::{App, AppMode, MenuScreen};
 use crate::game::Difficulty;
@@ -13,6 +13,114 @@ use crate::game::progression::{CHAPTERS, is_custom_chapter};
 use crate::settings::{OptionsClick, VolumeKind};
 
 impl App {
+    pub(in crate::app) fn open_pause_menu(&mut self) {
+        self.pause_cursor = 0;
+        self.pause_keyboard_focus = false;
+        self.mode = AppMode::Pause;
+        self.input.release_gameplay();
+        self.audio.stop_actions();
+    }
+
+    pub(in crate::app) fn resume_from_pause(&mut self) {
+        self.mode = AppMode::Playing;
+        self.input.release_gameplay();
+        self.audio.stop_actions();
+    }
+
+    pub(in crate::app) fn close_options(&mut self) {
+        self.binding_capture = None;
+        self.resolution_dropdown = false;
+        self.volume_drag = None;
+        self.mode = if self.options_return_to_pause {
+            AppMode::Pause
+        } else {
+            AppMode::LevelMenu
+        };
+        self.options_return_to_pause = false;
+    }
+
+    pub(in crate::app) fn handle_pause_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::ArrowUp | KeyCode::KeyW => {
+                self.pause_cursor = if self.pause_keyboard_focus {
+                    self.pause_cursor.saturating_sub(1)
+                } else {
+                    PAUSE_ACTION_COUNT - 1
+                };
+                self.pause_keyboard_focus = true;
+            }
+            KeyCode::ArrowDown | KeyCode::KeyS => {
+                self.pause_cursor = if self.pause_keyboard_focus {
+                    (self.pause_cursor + 1).min(PAUSE_ACTION_COUNT - 1)
+                } else {
+                    0
+                };
+                self.pause_keyboard_focus = true;
+            }
+            KeyCode::Enter | KeyCode::Space => {
+                if let Some(index) = self.pause_active_action() {
+                    self.activate_pause_action(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn handle_pause_mouse(&mut self, button: MouseButton, down: bool) {
+        if !down || button != MouseButton::Left {
+            return;
+        }
+
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let size = window.inner_size();
+        if let Some(index) = pause_hit(self.cursor_screen, size.width as f32, size.height as f32) {
+            self.pause_cursor = index;
+            self.pause_keyboard_focus = false;
+            self.activate_pause_action(index);
+        }
+    }
+
+    fn pause_active_action(&self) -> Option<usize> {
+        let Some(window) = self.window.as_ref() else {
+            return self.pause_keyboard_focus.then_some(self.pause_cursor);
+        };
+        let size = window.inner_size();
+
+        pause_hit(self.cursor_screen, size.width as f32, size.height as f32)
+            .or_else(|| self.pause_keyboard_focus.then_some(self.pause_cursor))
+    }
+
+    fn activate_pause_action(&mut self, index: usize) {
+        match index {
+            0 => self.resume_from_pause(),
+            1 => {
+                self.world.restart_from_checkpoint();
+                let listener = self.world.player.pos;
+                for event in self.world.drain_sound_events() {
+                    self.audio.play(event, listener);
+                }
+                self.resume_from_pause();
+            }
+            2 => {
+                self.load_current_level();
+                self.mode = AppMode::Playing;
+            }
+            3 => {
+                self.options_return_to_pause = true;
+                self.mode = AppMode::Options;
+            }
+            4 => {
+                self.options_return_to_pause = false;
+                self.mode = AppMode::LevelMenu;
+                self.input.release_gameplay();
+                self.audio.stop_actions();
+            }
+            _ => {}
+        }
+    }
+
     pub(in crate::app) fn handle_menu_key(&mut self, code: KeyCode) {
         self.clamp_menu_cursors();
 
@@ -43,7 +151,10 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Space => match self.main_menu_cursor {
                 0 => self.menu_screen = MenuScreen::Difficulty,
-                1 => self.mode = AppMode::Options,
+                1 => {
+                    self.options_return_to_pause = false;
+                    self.mode = AppMode::Options;
+                }
                 2 => self.mode = AppMode::Changelog,
                 _ => {}
             },
@@ -120,7 +231,7 @@ impl App {
         }
 
         match code {
-            KeyCode::Escape | KeyCode::Backspace => self.mode = AppMode::LevelMenu,
+            KeyCode::Escape | KeyCode::Backspace => self.close_options(),
             _ => {}
         }
     }
@@ -164,7 +275,10 @@ impl App {
                     self.main_menu_cursor = index;
                     match index {
                         0 => self.menu_screen = MenuScreen::Difficulty,
-                        1 => self.mode = AppMode::Options,
+                        1 => {
+                            self.options_return_to_pause = false;
+                            self.mode = AppMode::Options;
+                        }
                         2 => self.mode = AppMode::Changelog,
                         3 => event_loop.exit(),
                         _ => {}
@@ -273,10 +387,7 @@ impl App {
                 self.set_options_volume(kind, value);
             }
             OptionsClick::Back => {
-                self.binding_capture = None;
-                self.resolution_dropdown = false;
-                self.volume_drag = None;
-                self.mode = AppMode::LevelMenu;
+                self.close_options();
             }
             OptionsClick::None => self.resolution_dropdown = false,
         }

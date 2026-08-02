@@ -1,5 +1,5 @@
 portals_level version=3
-level name="0-1 INTO THE FIRE" spawn_x=-632 spawn_y=-248
+level name="0-1 INTO THE FIRE" spawn_x=-640 spawn_y=-240
 solid x=-704 y=416 w=2320 h=32 portalable=false rotation=0 obj_id=0 layer=0
 solid x=-704 y=-336 w=32 h=752 portalable=false rotation=0 obj_id=0 layer=0
 solid x=-592 y=-336 w=32 h=640 portalable=false rotation=0 obj_id=0 layer=0
@@ -21,7 +21,5 @@ enemy kind=filth spawn_x=288 spawn_y=272 spawn_id=1 spawn_wave=2 obj_id=0 layer=
 enemy kind=filth spawn_x=352 spawn_y=272 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
 enemy kind=filth spawn_x=177 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
 enemy kind=filth spawn_x=449 spawn_y=77 spawn_id=1 spawn_wave=2 obj_id=0 layer=0
-trigger kind=level_start x=-656 y=-288 w=48 h=80 obj_id=0 layer=0
+trigger kind=level_start x=-664 y=-280 w=48 h=80 obj_id=0 layer=0
 trigger kind=enemy_spawn x=-144 y=48 w=128 h=368 enemy_id=1 obj_id=0 layer=0
-world_portal x=-208 y=192 normal_x=-1 normal_y=0.00000004371139 tangent_x=-0.00000004371139 tangent_y=-1 width=464 portal_id=1 receiver_id=2 priority=0 scale=1 scale_objects=false seamless=true seamless_depth=256 seamless_angle=180 seamless_rely_on_walls=false obj_id=0 layer=0
-world_portal x=736 y=192 normal_x=-1 normal_y=0.00000033776624 tangent_x=-0.00000033776624 tangent_y=-1 width=464 portal_id=2 receiver_id=1 priority=0 scale=1 scale_objects=false seamless=true seamless_depth=256 seamless_angle=180 seamless_rely_on_walls=false obj_id=0 layer=0

@@ -1057,7 +1057,16 @@ impl Editor {
     }
 
     fn selected_indices(&self, index_of: fn(EditorSelection) -> Option<usize>) -> Vec<usize> {
-        self.selected.iter().copied().filter_map(index_of).collect()
+        let mut selected = self
+            .selected
+            .iter()
+            .copied()
+            .filter_map(index_of)
+            .collect::<Vec<_>>();
+
+        selected.sort_unstable();
+        selected.dedup();
+        selected
     }
 
     pub(super) fn selection_count(&self) -> usize {

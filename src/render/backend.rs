@@ -5,6 +5,7 @@ use std::sync::Arc;
 use winit::window::Window;
 
 use super::plan::RenderPlan;
+use super::sprites::{self, SpriteAsset, SpriteId, SpriteSize};
 use super::{RenderScene, Renderer};
 
 pub struct RenderBackend {
@@ -44,6 +45,7 @@ struct WgpuBackend {
     frame_bind_group: wgpu::BindGroup,
     frame_pixels: Vec<u32>,
     frame_size: (u32, u32),
+    _sprite_resources: WgpuSpriteResources,
 }
 
 impl WgpuBackend {
@@ -146,6 +148,7 @@ impl WgpuBackend {
         let (frame_texture, frame_texture_view, frame_bind_group) =
             Self::create_frame_texture(&device, &bind_group_layout, &sampler, width, height);
         let frame_pixels = vec![0; (width as usize).saturating_mul(height as usize)];
+        let sprite_resources = WgpuSpriteResources::new(&device, &queue)?;
 
         Ok(Self {
             surface,
@@ -160,6 +163,7 @@ impl WgpuBackend {
             frame_bind_group,
             frame_pixels,
             frame_size: (width, height),
+            _sprite_resources: sprite_resources,
         })
     }
 
@@ -326,6 +330,139 @@ impl WgpuBackend {
             .resize((width as usize).saturating_mul(height as usize), 0);
         self.frame_size = (width, height);
     }
+}
+
+struct WgpuSpriteResources {
+    _bind_group_layout: wgpu::BindGroupLayout,
+    _sampler: wgpu::Sampler,
+    _textures: Vec<WgpuSpriteTexture>,
+    _manifest_score: usize,
+}
+
+impl WgpuSpriteResources {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Self, RenderBackendError> {
+        sprites::validate_manifest().map_err(RenderBackendError::new)?;
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("portals-wgpu-sprite-bind-group-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("portals-wgpu-sprite-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let textures = sprites::gpu_ready_assets()
+            .map(|asset| Self::create_texture(device, queue, &bind_group_layout, &sampler, asset))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            _bind_group_layout: bind_group_layout,
+            _sampler: sampler,
+            _textures: textures,
+            _manifest_score: sprites::manifest_score(),
+        })
+    }
+
+    fn create_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        asset: SpriteAsset,
+    ) -> Result<WgpuSpriteTexture, RenderBackendError> {
+        let bytes = asset.raw_bytes().ok_or_else(|| {
+            RenderBackendError::new(format!("sprite '{}' is not GPU-ready", asset.label()))
+        })?;
+        let size = asset.size();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(asset.label()),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.width * 4),
+                rows_per_image: Some(size.height),
+            },
+            wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(asset.label()),
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+
+        Ok(WgpuSpriteTexture {
+            _id: asset.id(),
+            _size: size,
+            _frame_count: asset.frames().len(),
+            _texture: texture,
+            _texture_view: texture_view,
+            _bind_group: bind_group,
+        })
+    }
+}
+
+struct WgpuSpriteTexture {
+    _id: SpriteId,
+    _size: SpriteSize,
+    _frame_count: usize,
+    _texture: wgpu::Texture,
+    _texture_view: wgpu::TextureView,
+    _bind_group: wgpu::BindGroup,
 }
 
 fn pixels_as_bytes(pixels: &[u32]) -> &[u8] {

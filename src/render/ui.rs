@@ -17,9 +17,12 @@ use crate::platform::input::GameKey;
 use crate::settings::{OptionsTab, Settings, game_key_label, key_code_label};
 
 use super::canvas::{Canvas, Rect};
+use super::sprites::{
+    DEATH_SHUTDOWN_FLASH, DEATH_SKULL_1, DEATH_SKULL_2, MENU_V1, PIERCER_HUD, SpriteAsset,
+};
 use super::{
     DebugOverlay, EditorInspector, EditorObjectMeta, EditorOverlay, LevelMenuOverlay,
-    LevelMenuScreen,
+    LevelMenuScreen, PauseOverlay,
 };
 
 use layout::*;
@@ -34,15 +37,6 @@ struct OptionsContent<'a> {
     resolution_dropdown: bool,
 }
 
-const MENU_V1: &[u8] = include_bytes!("../../assets/images/menu_v1.rgba");
-const MENU_V1_SIZE: usize = 760;
-const PIERCER_HUD: &[u8] = include_bytes!("../../assets/images/hud/PiercerHUDNew.rgba");
-const PIERCER_HUD_SIZE: (usize, usize) = (550, 268);
-const DEATH_SKULL_1: &[u8] = include_bytes!("../../assets/images/death/DeathScreenSkull1.rgba");
-const DEATH_SKULL_2: &[u8] = include_bytes!("../../assets/images/death/DeathScreenSkull2.rgba");
-const DEATH_SKULL_SIZE: (usize, usize) = (1637, 1636);
-const DEATH_SHUTDOWN_FLASH: &[u8] = include_bytes!("../../assets/images/death/ISeeYou.rgba");
-const DEATH_SHUTDOWN_FLASH_SIZE: (usize, usize) = (480, 270);
 const MENU_SOURCE_LINES: [&str; 24] = [
     "#include { above, so } from \"aperture/core\";",
     "#include { permutation, transmutation, exhalation } from \"machine/v1\";",
@@ -69,6 +63,13 @@ const MENU_SOURCE_LINES: [&str; 24] = [
     "let social_github = \"https://github.com/lexawhatt\";",
     "panic_handler.install(|| restart_from_blood());",
 ];
+const PAUSE_LABELS: [&str; 5] = [
+    "RESUME",
+    "RESTART CHECKPOINT",
+    "RESTART MISSION",
+    "OPTIONS",
+    "QUIT MISSION",
+];
 
 impl Canvas<'_> {
     pub(super) fn hud(
@@ -84,12 +85,11 @@ impl Canvas<'_> {
         let cyan_dim = Color::rgb(9, 86, 98);
         let black = Color::rgb(5, 8, 12);
         let weapon_w = 260.0;
-        let weapon_h = weapon_w * PIERCER_HUD_SIZE.1 as f32 / PIERCER_HUD_SIZE.0 as f32;
+        let piercer_size = PIERCER_HUD.size();
+        let weapon_h = weapon_w * piercer_size.height as f32 / piercer_size.width as f32;
 
-        self.draw_rgba_image(
+        self.draw_sprite(
             PIERCER_HUD,
-            PIERCER_HUD_SIZE.0,
-            PIERCER_HUD_SIZE.1,
             origin + Vec2::new(76.0, -weapon_h - 16.0),
             Vec2::new(weapon_w, weapon_h),
         );
@@ -183,10 +183,8 @@ impl Canvas<'_> {
             self.death_diagnostic_text(death);
             self.death_glitch_bars(death.timer);
             if death.timer >= PLAYER_DEATH_PROMPT_TIME - PLAYER_DEATH_SHUTDOWN_FLASH_TIME {
-                self.draw_rgba_image_opaque(
+                self.draw_sprite_opaque(
                     DEATH_SHUTDOWN_FLASH,
-                    DEATH_SHUTDOWN_FLASH_SIZE.0,
-                    DEATH_SHUTDOWN_FLASH_SIZE.1,
                     Vec2::ZERO,
                     Vec2::new(self.width as f32, self.height as f32),
                 );
@@ -200,24 +198,57 @@ impl Canvas<'_> {
             return;
         }
 
-        let width = self.width as i32;
-        let height = self.height as i32;
-        let edge_falloff = (self.width.min(self.height) as f32 * 0.34).max(1.0);
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let edge = (self.width.min(self.height) as f32 * (0.012 + amount * 0.045)).clamp(4.0, 42.0);
+        let hot = mix_color(Color::rgb(118, 0, 0), Color::rgb(255, 32, 24), amount);
+        let dim = mix_color(Color::rgb(48, 0, 0), Color::rgb(150, 8, 8), amount);
 
-        for y in 0..height {
-            let y_edge = (y as f32).min(self.height as f32 - y as f32).max(0.0);
-            for x in 0..width {
-                let x_edge = (x as f32).min(self.width as f32 - x as f32).max(0.0);
-                let edge_distance = x_edge.min(y_edge);
-                let vignette = (1.0 - edge_distance / edge_falloff).clamp(0.0, 1.0);
-                let mix = amount * (0.18 + vignette * 0.76);
+        self.fill_rect(
+            Rect {
+                pos: Vec2::ZERO,
+                size: Vec2::new(width, edge),
+            },
+            hot,
+        );
+        self.fill_rect(
+            Rect {
+                pos: Vec2::new(0.0, height - edge),
+                size: Vec2::new(width, edge),
+            },
+            hot,
+        );
+        self.fill_rect(
+            Rect {
+                pos: Vec2::ZERO,
+                size: Vec2::new(edge, height),
+            },
+            dim,
+        );
+        self.fill_rect(
+            Rect {
+                pos: Vec2::new(width - edge, 0.0),
+                size: Vec2::new(edge, height),
+            },
+            dim,
+        );
 
-                if mix <= 0.01 {
-                    continue;
-                }
+        let line_count = (amount * 9.0).ceil() as i32;
+        let seed = (amount * 1000.0) as i32 + self.width as i32 * 3 + self.height as i32 * 5;
+        for index in 0..line_count {
+            let y = (seed * (index + 3) * 17).rem_euclid(self.height.max(1) as i32) as f32;
+            let x = (seed * (index + 5) * 13).rem_euclid(self.width.max(1) as i32) as f32;
+            let line_width = (width * (0.16 + amount * 0.36) + index as f32 * 11.0)
+                .min(width - x)
+                .max(18.0);
 
-                self.put_raw_px(x, y, red_damage_pulse(self.raw_px(x, y), mix));
-            }
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::new(x, y),
+                    size: Vec2::new(line_width, 2.0),
+                },
+                hot,
+            );
         }
     }
 
@@ -363,7 +394,7 @@ impl Canvas<'_> {
     }
 
     fn death_skull_screen(&mut self, death: DeathSequence) {
-        let image = if death.skull_frame == 0 {
+        let sprite = if death.skull_frame == 0 {
             DEATH_SKULL_1
         } else {
             DEATH_SKULL_2
@@ -393,13 +424,7 @@ impl Canvas<'_> {
             white,
         );
         self.octagon_outline(center, frame_size, white, 2);
-        self.draw_rgba_image(
-            image,
-            DEATH_SKULL_SIZE.0,
-            DEATH_SKULL_SIZE.1,
-            pos,
-            Vec2::splat(size),
-        );
+        self.draw_sprite(sprite, pos, Vec2::splat(size));
         self.centered_text(
             Vec2::new(
                 width * 0.5,
@@ -442,6 +467,100 @@ impl Canvas<'_> {
             LevelMenuScreen::Chapter => self.chapter_menu(menu),
             LevelMenuScreen::Layer => self.layer_menu(menu),
         }
+    }
+
+    pub(super) fn pause_overlay(&mut self, pause: &PauseOverlay) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+        let panel_size = Vec2::new(
+            (width * 0.42).clamp(430.0, 720.0),
+            (height * 0.56).clamp(390.0, 560.0),
+        );
+        let panel = Rect {
+            pos: Vec2::new((width - panel_size.x) * 0.5, (height - panel_size.y) * 0.5),
+            size: panel_size,
+        };
+        let active = pause
+            .hover
+            .or(pause.keyboard_focus)
+            .filter(|index| *index < PAUSE_LABELS.len());
+
+        self.pause_dim_background();
+        self.beveled_rect_fill(panel, 20.0, Color::rgb(0, 0, 0));
+        self.beveled_rect_outline(panel, 20.0, Color::rgb(82, 86, 92));
+        self.beveled_rect_outline(
+            Rect {
+                pos: panel.pos + Vec2::splat(8.0),
+                size: panel.size - Vec2::splat(16.0),
+            },
+            18.0,
+            Color::rgb(26, 29, 34),
+        );
+
+        self.centered_text(
+            Vec2::new(width * 0.5, panel.pos.y + 36.0),
+            "-- PAUSED --",
+            if width < 760.0 { 3 } else { 5 },
+            Color::rgb(245, 245, 245),
+        );
+
+        for (index, label) in PAUSE_LABELS.iter().enumerate() {
+            let (pos, size) = pause_button_rect(index, width, height);
+            self.pause_button(pos, size, label, active == Some(index));
+        }
+    }
+
+    fn pause_dim_background(&mut self) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+
+        for y in (0..self.height as i32).step_by(3) {
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::new(0.0, y as f32),
+                    size: Vec2::new(width, 1.0),
+                },
+                Color::rgb(0, 0, 0),
+            );
+        }
+
+        self.fill_rect(
+            Rect {
+                pos: Vec2::ZERO,
+                size: Vec2::new(width, 18.0),
+            },
+            Color::rgb(0, 0, 0),
+        );
+        self.fill_rect(
+            Rect {
+                pos: Vec2::new(0.0, height - 18.0),
+                size: Vec2::new(width, 18.0),
+            },
+            Color::rgb(0, 0, 0),
+        );
+    }
+
+    fn pause_button(&mut self, pos: Vec2, size: Vec2, label: &str, active: bool) {
+        let rect = Rect { pos, size };
+        let fill = if active {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(3, 4, 6)
+        };
+        let edge = if active {
+            Color::rgb(245, 245, 245)
+        } else {
+            Color::rgb(118, 122, 128)
+        };
+        let text = if active {
+            Color::rgb(0, 0, 0)
+        } else {
+            Color::rgb(245, 245, 245)
+        };
+
+        self.beveled_rect_fill(rect, 10.0, fill);
+        self.beveled_rect_outline(rect, 10.0, edge);
+        self.centered_text(pos + size * 0.5 - Vec2::new(0.0, 7.0), label, 2, text);
     }
 
     fn main_level_menu(&mut self, menu: &LevelMenuOverlay) {
@@ -1043,30 +1162,50 @@ impl Canvas<'_> {
         self.text(Vec2::new(left, top), "CHANGELOG", 5, text);
         self.text(
             Vec2::new(left, top + 58.0),
-            "ZETA / COMBAT + OPTIMIZATION UPDATE",
+            "ήτα(η) / WGPU + EDITOR REBUILD",
             2,
             text,
         );
 
-        let lines = [
+        let eta_lines = [
+            "RENDER: WGPU BACKEND ENABLED",
+            "EDITOR: LEVEL EDITING WORKFLOW REBUILT",
+            "UI: PAUSE, OPTIONS, HUD AND MENUS POLISHED",
+            "CORE: AI, RENDER AND GAMEPLAY CODE OPTIMIZED",
+            "LEVELS: SAVE FORMAT AND METADATA LOGIC REWORKED",
+            "TOOLS: CUSTOM LEVEL FLOW AND ASSET PIPELINE CLEANED UP",
+            "STABILITY: FRAME HITCHES AND DAMAGE FLASH COST REDUCED",
+        ];
+        for (index, line) in eta_lines.iter().enumerate() {
+            self.text(
+                Vec2::new(left + 20.0, top + 106.0 + index as f32 * 28.0),
+                line,
+                2,
+                text,
+            );
+        }
+
+        let previous_top = top + 106.0 + eta_lines.len() as f32 * 28.0 + 38.0;
+        self.text(
+            Vec2::new(left, previous_top),
+            "PREVIOUS: ZETA / COMBAT + OPTIMIZATION UPDATE",
+            2,
+            muted,
+        );
+
+        let zeta_lines = [
             "COMBAT: PIERCER PROTOTYPE ADDED",
             "PLAYER: DEATH ANIMATIONS ADDED",
             "ENEMIES: FIRST TEST ENEMY PROTOTYPES",
             "AUDIO: EXPANDED WEAPON, DEATH, ENEMY SOUNDS",
             "PORTALS: OPTIMIZED SEAMLESS PORTAL SYSTEM",
-            "CORE: REWORKED FILE STRUCTURE FOR PERFORMANCE",
-            "KNOWN: MANUAL DOORS NEED TRIGGER SYSTEM",
         ];
-        for (index, line) in lines.iter().enumerate() {
+        for (index, line) in zeta_lines.iter().enumerate() {
             self.text(
-                Vec2::new(left + 20.0, top + 116.0 + index as f32 * 34.0),
+                Vec2::new(left + 20.0, previous_top + 44.0 + index as f32 * 24.0),
                 line,
-                2,
-                if index == lines.len() - 1 {
-                    muted
-                } else {
-                    text
-                },
+                1,
+                muted,
             );
         }
 
@@ -1084,8 +1223,13 @@ impl Canvas<'_> {
         active_tab: OptionsTab,
         capture: Option<GameKey>,
         resolution_dropdown: bool,
+        dim_level_background: bool,
     ) {
-        self.options_background();
+        if dim_level_background {
+            self.dim_level_background();
+        } else {
+            self.options_background();
+        }
 
         let width = self.width as f32;
         let height = self.height as f32;
@@ -1113,6 +1257,37 @@ impl Canvas<'_> {
         if options_show_scrollbar(width, height) {
             self.options_scrollbar(width * 0.745);
         }
+    }
+
+    fn dim_level_background(&mut self) {
+        let width = self.width as f32;
+        let height = self.height as f32;
+
+        for y in (0..self.height as i32).step_by(2) {
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::new(0.0, y as f32),
+                    size: Vec2::new(width, 1.0),
+                },
+                Color::rgb(0, 0, 0),
+            );
+        }
+
+        self.fill_rect(
+            Rect {
+                pos: Vec2::ZERO,
+                size: Vec2::new(width, 12.0),
+            },
+            Color::rgb(0, 0, 0),
+        );
+        self.fill_rect(
+            Rect {
+                pos: Vec2::new(0.0, height - 12.0),
+                size: Vec2::new(width, 12.0),
+            },
+            Color::rgb(0, 0, 0),
+        );
+        self.menu_frame();
     }
 
     pub(super) fn editor_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
@@ -1205,7 +1380,7 @@ impl Canvas<'_> {
 
     fn selected_solid_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, solid) in world.level.solids.iter().enumerate() {
-            if !overlay.selected_solids.contains(&index) {
+            if !selection_contains(&overlay.selected_solids, index) {
                 continue;
             }
 
@@ -1231,13 +1406,9 @@ impl Canvas<'_> {
         }
 
         if overlay.selection_count > 1 {
-            let selected = overlay
-                .selected_solids
-                .iter()
-                .filter_map(|index| world.level.solids.get(*index))
-                .copied()
-                .collect::<Vec<_>>();
-            if let Some((min, max)) = solids_bounds(&selected) {
+            if let Some((min, max)) =
+                indexed_solids_bounds(&world.level.solids, &overlay.selected_solids)
+            {
                 self.world_rect_outline(
                     Rect {
                         pos: min,
@@ -1257,7 +1428,7 @@ impl Canvas<'_> {
 
     fn selected_door_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, door) in world.level.doors.iter().enumerate() {
-            if !overlay.selected_doors.contains(&index) {
+            if !selection_contains(&overlay.selected_doors, index) {
                 continue;
             }
 
@@ -1277,7 +1448,7 @@ impl Canvas<'_> {
 
     fn selected_hazard_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, hazard) in world.level.hazards.iter().enumerate() {
-            if !overlay.selected_hazards.contains(&index) {
+            if !selection_contains(&overlay.selected_hazards, index) {
                 continue;
             }
 
@@ -1296,7 +1467,7 @@ impl Canvas<'_> {
 
     fn selected_checkpoint_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, checkpoint) in world.level.checkpoints.iter().enumerate() {
-            if !overlay.selected_checkpoints.contains(&index) {
+            if !selection_contains(&overlay.selected_checkpoints, index) {
                 continue;
             }
 
@@ -1315,7 +1486,7 @@ impl Canvas<'_> {
 
     fn selected_enemy_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, enemy) in world.level.enemies.iter().enumerate() {
-            if !overlay.selected_enemies.contains(&index) {
+            if !selection_contains(&overlay.selected_enemies, index) {
                 continue;
             }
 
@@ -1339,7 +1510,7 @@ impl Canvas<'_> {
 
     fn selected_trigger_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, trigger) in world.level.triggers.iter().enumerate() {
-            if !overlay.selected_triggers.contains(&index) {
+            if !selection_contains(&overlay.selected_triggers, index) {
                 continue;
             }
 
@@ -1362,7 +1533,7 @@ impl Canvas<'_> {
 
     fn selected_text_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, text) in world.level.texts.iter().enumerate() {
-            if !overlay.selected_texts.contains(&index) {
+            if !selection_contains(&overlay.selected_texts, index) {
                 continue;
             }
 
@@ -1390,7 +1561,7 @@ impl Canvas<'_> {
 
     fn selected_world_portal_overlay(&mut self, world: &World, overlay: &EditorOverlay) {
         for (index, portal) in world.level.world_portals.iter().enumerate() {
-            if !overlay.selected_world_portals.contains(&index) {
+            if !selection_contains(&overlay.selected_world_portals, index) {
                 continue;
             }
 
@@ -2805,35 +2976,31 @@ impl Canvas<'_> {
             ((height - target_size) * 0.48).clamp(92.0, max_y),
         );
 
-        self.draw_rgba_image(
-            MENU_V1,
-            MENU_V1_SIZE,
-            MENU_V1_SIZE,
+        self.draw_sprite(MENU_V1, pos, Vec2::splat(target_size));
+    }
+
+    fn draw_sprite(&mut self, sprite: SpriteAsset, pos: Vec2, size: Vec2) {
+        self.draw_sprite_inner(sprite, pos, size, true);
+    }
+
+    fn draw_sprite_opaque(&mut self, sprite: SpriteAsset, pos: Vec2, size: Vec2) {
+        self.draw_sprite_inner(sprite, pos, size, false);
+    }
+
+    fn draw_sprite_inner(&mut self, sprite: SpriteAsset, pos: Vec2, size: Vec2, skip_dark: bool) {
+        let Some(bytes) = sprite.raw_bytes() else {
+            return;
+        };
+        let source_size = sprite.size();
+
+        self.draw_rgba_image_inner(
+            bytes,
+            source_size.width as usize,
+            source_size.height as usize,
             pos,
-            Vec2::splat(target_size),
+            size,
+            skip_dark,
         );
-    }
-
-    fn draw_rgba_image(
-        &mut self,
-        bytes: &[u8],
-        source_width: usize,
-        source_height: usize,
-        pos: Vec2,
-        size: Vec2,
-    ) {
-        self.draw_rgba_image_inner(bytes, source_width, source_height, pos, size, true);
-    }
-
-    fn draw_rgba_image_opaque(
-        &mut self,
-        bytes: &[u8],
-        source_width: usize,
-        source_height: usize,
-        pos: Vec2,
-        size: Vec2,
-    ) {
-        self.draw_rgba_image_inner(bytes, source_width, source_height, pos, size, false);
     }
 
     fn draw_rgba_image_inner(
@@ -2847,12 +3014,25 @@ impl Canvas<'_> {
     ) {
         let dest_w = size.x.round().max(1.0) as i32;
         let dest_h = size.y.round().max(1.0) as i32;
+        let dest_x = pos.x.round() as i32;
+        let dest_y = pos.y.round() as i32;
+        let x0 = dest_x.max(0);
+        let y0 = dest_y.max(0);
+        let x1 = (dest_x + dest_w).min(self.width as i32);
+        let y1 = (dest_y + dest_h).min(self.height as i32);
+
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
         let scale_x = source_width as f32 / dest_w as f32;
         let scale_y = source_height as f32 / dest_h as f32;
 
-        for dy in 0..dest_h {
+        for y in y0..y1 {
+            let dy = y - dest_y;
             let sy = ((dy as f32 * scale_y) as usize).min(source_height - 1);
-            for dx in 0..dest_w {
+            for x in x0..x1 {
+                let dx = x - dest_x;
                 let sx = ((dx as f32 * scale_x) as usize).min(source_width - 1);
                 let index = (sy * source_width + sx) * 4;
                 let r = bytes[index];
@@ -2864,11 +3044,7 @@ impl Canvas<'_> {
                     continue;
                 }
 
-                self.put_px(
-                    (pos.x + dx as f32).round() as i32,
-                    (pos.y + dy as f32).round() as i32,
-                    Color::rgb(r, g, b),
-                );
+                self.put_px(x, y, Color::rgb(r, g, b));
             }
         }
     }
@@ -2905,6 +3081,26 @@ fn trigger_label(kind: LevelTriggerKind) -> String {
         LevelTriggerKind::LevelEnd => "LEVEL END".to_string(),
         LevelTriggerKind::EnemySpawn { enemy_id } => format!("ENEMY SPAWN ID:{}", enemy_id),
     }
+}
+
+fn selection_contains(indices: &[usize], index: usize) -> bool {
+    indices.binary_search(&index).is_ok()
+}
+
+fn pause_button_rect(index: usize, width: f32, height: f32) -> (Vec2, Vec2) {
+    let size = Vec2::new(
+        (width * 0.17).clamp(220.0, 330.0),
+        (height * 0.052).clamp(42.0, 56.0),
+    );
+    let gap = (height * 0.018).clamp(12.0, 18.0);
+    let total_height = size.y * PAUSE_LABELS.len() as f32 + gap * (PAUSE_LABELS.len() - 1) as f32;
+    let top = (height * 0.5 - total_height * 0.5 + (height * 0.035).clamp(20.0, 38.0))
+        .clamp(132.0, (height - total_height - 34.0).max(132.0));
+
+    (
+        Vec2::new((width - size.x) * 0.5, top + index as f32 * (size.y + gap)),
+        size,
+    )
 }
 
 fn trigger_color(kind: LevelTriggerKind) -> Color {

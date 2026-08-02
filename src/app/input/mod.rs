@@ -29,6 +29,7 @@ impl App {
 
             match self.mode {
                 AppMode::Playing => self.handle_game_key(code, down),
+                AppMode::Pause if down => self.handle_pause_key(code),
                 AppMode::LevelMenu if down => self.handle_menu_key(code),
                 AppMode::Changelog if down => self.handle_changelog_key(code),
                 AppMode::Options if down => self.handle_options_key(code),
@@ -46,6 +47,7 @@ impl App {
     ) {
         match self.mode {
             AppMode::Playing => self.handle_game_mouse(button, down),
+            AppMode::Pause => self.handle_pause_mouse(button, down),
             AppMode::LevelMenu => self.handle_menu_mouse(button, down, event_loop),
             AppMode::Changelog => self.handle_changelog_mouse(button, down),
             AppMode::Options => self.handle_options_mouse(button, down),

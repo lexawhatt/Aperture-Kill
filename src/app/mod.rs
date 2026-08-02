@@ -41,8 +41,11 @@ pub struct App {
     chapter_cursor: usize,
     level_cursor: usize,
     difficulty_progress: [usize; Difficulty::COUNT],
+    pause_cursor: usize,
+    pause_keyboard_focus: bool,
     settings: Settings,
     options_tab: OptionsTab,
+    options_return_to_pause: bool,
     binding_capture: Option<platform::input::GameKey>,
     resolution_dropdown: bool,
     volume_drag: Option<VolumeKind>,
@@ -84,8 +87,11 @@ impl App {
             chapter_cursor: 0,
             level_cursor: 0,
             difficulty_progress: [0; Difficulty::COUNT],
+            pause_cursor: 0,
+            pause_keyboard_focus: false,
             settings: Settings::new(),
             options_tab: OptionsTab::General,
+            options_return_to_pause: false,
             binding_capture: None,
             resolution_dropdown: false,
             volume_drag: None,
@@ -179,6 +185,7 @@ impl App {
 #[derive(Clone, Copy, PartialEq)]
 enum AppMode {
     Playing,
+    Pause,
     LevelMenu,
     Changelog,
     Options,
@@ -238,6 +245,42 @@ mod tests {
         app.handle_changelog_key(KeyCode::Enter);
 
         assert!(matches!(app.mode, AppMode::LevelMenu));
+    }
+
+    #[test]
+    fn pause_resume_returns_to_playing() {
+        let mut app = test_app();
+
+        app.mode = AppMode::Playing;
+        app.open_pause_menu();
+        assert!(matches!(app.mode, AppMode::Pause));
+        assert!(!app.pause_keyboard_focus);
+
+        app.resume_from_pause();
+        assert!(matches!(app.mode, AppMode::Playing));
+    }
+
+    #[test]
+    fn pause_keyboard_focus_starts_after_navigation() {
+        let mut app = test_app();
+
+        app.open_pause_menu();
+        app.handle_pause_key(KeyCode::ArrowDown);
+
+        assert!(app.pause_keyboard_focus);
+        assert_eq!(app.pause_cursor, 0);
+    }
+
+    #[test]
+    fn pause_options_return_to_pause() {
+        let mut app = test_app();
+
+        app.mode = AppMode::Pause;
+        app.options_return_to_pause = true;
+        app.mode = AppMode::Options;
+        app.close_options();
+
+        assert!(matches!(app.mode, AppMode::Pause));
     }
 
     #[test]

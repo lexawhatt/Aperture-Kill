@@ -56,6 +56,23 @@ impl<'a> Canvas<'a> {
         let x1 = (rect.pos.x + rect.size.x).min(self.width as f32) as i32;
         let y1 = (rect.pos.y + rect.size.y).min(self.height as f32) as i32;
 
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        if self.clip.is_none() {
+            let color = color.to_u32();
+            let frame_width = self.width as usize;
+            let x0 = x0 as usize;
+            let x1 = x1 as usize;
+
+            for yy in y0 as usize..y1 as usize {
+                let row = yy * frame_width;
+                self.frame[row + x0..row + x1].fill(color);
+            }
+            return;
+        }
+
         for yy in y0..y1 {
             for xx in x0..x1 {
                 self.put_px(xx, yy, color);

@@ -334,6 +334,10 @@ impl World {
         std::mem::take(&mut self.level_completed)
     }
 
+    pub fn restart_from_checkpoint(&mut self) {
+        self.respawn_player();
+    }
+
     fn tick_doors(&mut self, dt: f32) {
         self.door_events.clear();
         self.level

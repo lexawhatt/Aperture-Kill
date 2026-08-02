@@ -34,6 +34,18 @@ impl Canvas<'_> {
         outline: Color,
         cuts: &[SeamlessCut],
     ) {
+        if cuts.is_empty() && solid.rotation().abs() <= 0.001 {
+            self.fill_world_rect(
+                Rect {
+                    pos: solid.pos(),
+                    size: solid.size(),
+                },
+                fill,
+            );
+            self.solid_outline(solid, outline);
+            return;
+        }
+
         let corners = solid.corners().map(|corner| self.world_to_screen(corner));
         let (min, max) = corners.into_iter().fold(
             (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),

@@ -56,15 +56,31 @@ pub(in crate::game) fn enemy_targets(
     portal_links: &[PortalLink],
 ) -> Vec<EnemyTarget> {
     let surfaces = nav_surfaces(level);
+    let mut portal_edges = Vec::new();
+    let mut portal_edge_half_size = None;
 
     enemies
         .iter()
         .map(|enemy| {
+            if !enemy.is_active() {
+                return EnemyTarget {
+                    pos: enemy.pos,
+                    can_attack: false,
+                };
+            }
+
+            let half_size = enemy.half_size();
+            if portal_edge_half_size != Some(half_size) {
+                portal_edges = portal_nav_edges(&surfaces, portal_links, half_size);
+                portal_edge_half_size = Some(half_size);
+            }
+
             enemy_target(
                 level,
                 &surfaces,
+                &portal_edges,
                 enemy.pos,
-                enemy.half_size(),
+                half_size,
                 player_pos,
                 portal_links,
             )
@@ -111,6 +127,16 @@ pub(in crate::game) fn separate_enemies(
     collision: CollisionGeometry<'_>,
     portals: &[Portal],
 ) {
+    if enemies
+        .iter()
+        .filter(|enemy| enemy.is_active())
+        .take(2)
+        .count()
+        < 2
+    {
+        return;
+    }
+
     for _ in 0..3 {
         let mut moved = false;
 
@@ -169,6 +195,7 @@ pub(in crate::game) fn separate_enemies(
 fn enemy_target(
     level: &Level,
     surfaces: &[NavSurface],
+    portal_edges: &[PortalNavEdge],
     enemy_pos: Vec2,
     enemy_half_size: Vec2,
     player_pos: Vec2,
@@ -189,10 +216,10 @@ fn enemy_target(
 
     enemy_route_target(
         surfaces,
+        portal_edges,
         enemy_pos,
         enemy_half_size,
         player_pos,
-        portal_links,
         direct_clear,
     )
     .map(|target| EnemyTarget {
@@ -209,10 +236,10 @@ fn enemy_target(
 
 fn enemy_route_target(
     surfaces: &[NavSurface],
+    portal_edges: &[PortalNavEdge],
     enemy_pos: Vec2,
     enemy_half_size: Vec2,
     player_pos: Vec2,
-    portal_links: &[PortalLink],
     direct_clear: bool,
 ) -> Option<EnemyRouteTarget> {
     let start_surface = nav_surface_at(surfaces, enemy_pos, enemy_half_size)?;
@@ -227,10 +254,9 @@ fn enemy_route_target(
         return None;
     }
 
-    let portal_edges = portal_nav_edges(surfaces, portal_links, enemy_half_size);
     let route = surface_route_next_x(
         surfaces,
-        &portal_edges,
+        portal_edges,
         start_surface,
         enemy_pos.x,
         target_surface,
@@ -552,21 +578,25 @@ fn portal_visible_enemy_target(
 ) -> Option<EnemyTarget> {
     portal_links
         .iter()
-        .filter(|link| {
-            enemy_pos.distance(link.source.pos) + link.destination.pos.distance(player_pos)
-                <= FILTH_SIGHT_RANGE
-                && line_clear_to_portal(level, enemy_pos, link.source)
-                && line_clear_from_portal(level, link.destination, player_pos)
+        .filter_map(|link| {
+            let route_distance =
+                enemy_pos.distance(link.source.pos) + link.destination.pos.distance(player_pos);
+            if route_distance > FILTH_SIGHT_RANGE
+                || !line_clear_to_portal(level, enemy_pos, link.source)
+                || !line_clear_from_portal(level, link.destination, player_pos)
+            {
+                return None;
+            }
+
+            let target = EnemyTarget {
+                pos: link.destination.map_view_point_to(&link.source, player_pos),
+                can_attack: true,
+            };
+
+            Some((enemy_pos.distance(target.pos), target))
         })
-        .map(|link| EnemyTarget {
-            pos: link.destination.map_view_point_to(&link.source, player_pos),
-            can_attack: true,
-        })
-        .min_by(|a, b| {
-            enemy_pos
-                .distance(a.pos)
-                .total_cmp(&enemy_pos.distance(b.pos))
-        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, target)| target)
 }
 
 fn enemy_overlap_push(a: &Enemy, b: &Enemy) -> Option<Vec2> {
