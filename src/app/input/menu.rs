@@ -10,7 +10,7 @@ use crate::app::menu::{
 use crate::app::{App, AppMode, MenuScreen};
 use crate::game::Difficulty;
 use crate::game::progression::{CHAPTERS, is_custom_chapter};
-use crate::settings::{OptionsClick, VolumeKind};
+use crate::settings::{DisplayMode, OptionsClick, VolumeKind};
 
 impl App {
     pub(in crate::app) fn open_pause_menu(&mut self) {
@@ -377,6 +377,9 @@ impl App {
             OptionsClick::ResolutionChoice(index) => {
                 if let Some(resolution) = self.settings.resolutions.get(index).copied() {
                     self.settings.resolution = resolution;
+                    if self.settings.display_mode == DisplayMode::Borderless {
+                        self.settings.display_mode = DisplayMode::Windowed;
+                    }
                 }
                 self.resolution_dropdown = false;
                 self.apply_display_settings();

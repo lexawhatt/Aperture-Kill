@@ -64,7 +64,7 @@ pub(super) fn menu_left(width: f32) -> f32 {
 }
 
 pub(super) fn menu_button_gap(height: f32) -> f32 {
-    (height * 0.017).clamp(14.0, 22.0)
+    (height * 0.012).clamp(10.0, 14.0)
 }
 
 pub(super) fn social_y(height: f32) -> f32 {

@@ -31,6 +31,8 @@ impl ApplicationHandler for App {
             }
         };
         self.settings
+            .set_current_resolution(current_display_resolution(window.as_ref()));
+        self.settings
             .set_resolutions(available_resolutions(window.as_ref()));
         let render_backend = match RenderBackend::new(window.clone()) {
             Ok(backend) => backend,
@@ -82,6 +84,12 @@ impl ApplicationHandler for App {
                 self.editor.cancel_drag();
                 self.modifiers = Default::default();
             }
+            WindowEvent::Resized(size) => {
+                self.settings.set_current_resolution(Resolution {
+                    width: size.width,
+                    height: size.height,
+                });
+            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
@@ -114,6 +122,10 @@ impl App {
         self.settings
             .set_resolutions(available_resolutions(window.as_ref()));
         apply_window_display(window, self.settings.display_mode, self.settings.resolution);
+        if self.settings.display_mode == DisplayMode::Borderless {
+            self.settings
+                .set_current_resolution(current_display_resolution(window.as_ref()));
+        }
     }
 }
 
@@ -149,10 +161,15 @@ fn apply_window_display(window: &Window, mode: DisplayMode, resolution: Resoluti
 
 fn available_resolutions(window: &Window) -> Vec<Resolution> {
     let Some(monitor) = window.current_monitor() else {
-        return Vec::new();
+        let size = window.inner_size();
+        return vec![Resolution {
+            width: size.width,
+            height: size.height,
+        }];
     };
 
     let monitor_size = monitor.size();
+    let window_size = window.inner_size();
     let mut resolutions = monitor
         .video_modes()
         .map(|video_mode| {
@@ -175,8 +192,28 @@ fn available_resolutions(window: &Window) -> Vec<Resolution> {
             height: monitor_size.height,
         });
     }
+    resolutions.push(Resolution {
+        width: monitor_size.width,
+        height: monitor_size.height,
+    });
+    resolutions.push(Resolution {
+        width: window_size.width,
+        height: window_size.height,
+    });
 
     resolutions
+}
+
+fn current_display_resolution(window: &Window) -> Resolution {
+    let size = window
+        .current_monitor()
+        .map(|monitor| monitor.size())
+        .unwrap_or_else(|| window.inner_size());
+
+    Resolution {
+        width: size.width,
+        height: size.height,
+    }
 }
 
 fn common_resolutions(max_width: u32, max_height: u32) -> Vec<Resolution> {

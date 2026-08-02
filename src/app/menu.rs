@@ -87,15 +87,20 @@ pub(super) fn social_hit(pos: Vec2, width: f32, height: f32) -> Option<&'static 
     let y = social_y(height);
     let mut x = menu_left(width);
 
-    for (network, handle, url) in SOCIAL_LINKS {
-        let link_width = text_width(network, 2) + 12.0 + text_width(handle, 1);
-        let link_height = 20.0;
+    for (index, (network, _, url)) in SOCIAL_LINKS.iter().enumerate() {
+        let link_width = text_width(network, 2);
+        let link_height = 34.0;
 
         if pos.x >= x && pos.x <= x + link_width && pos.y >= y && pos.y <= y + link_height {
             return Some(url);
         }
 
-        x += link_width + 30.0;
+        x += link_width
+            + if index == SOCIAL_LINKS.len() - 1 {
+                0.0
+            } else {
+                34.0
+            };
     }
 
     None
@@ -232,13 +237,13 @@ pub(super) fn options_drag_volume(
 fn menu_buttons(width: f32, height: f32) -> [(Vec2, Vec2); 4] {
     let button_size = Vec2::new(
         (width * 0.34).clamp(320.0, 660.0),
-        (height * 0.058).clamp(54.0, 70.0),
+        (height * 0.084).clamp(68.0, 104.0),
     );
     let gap = menu_button_gap(height);
     let total_height = button_size.y * 4.0 + gap * 3.0;
-    let target_y = height * 0.42;
-    let max_y = height - 100.0 - total_height;
-    let min_y = height * 0.34;
+    let target_y = height * 0.405;
+    let max_y = height - 156.0 - total_height;
+    let min_y = height * 0.35;
     let start = Vec2::new(menu_left(width), target_y.min(max_y).max(min_y));
 
     [
@@ -390,13 +395,15 @@ fn options_tab_hit(pos: Vec2, width: f32, height: f32) -> Option<OptionsTab> {
 }
 
 fn controls_hit(pos: Vec2, layout: &OptionsLayout) -> OptionsClick {
+    let key_w = (layout.control_w * 0.39).clamp(122.0, 172.0);
+    let gap = 10.0;
     for (index, key) in GAME_ACTIONS.iter().enumerate() {
         let row_y = layout.y(96.0 + index as f32 * 68.0);
-        if rect_hit(
-            pos,
-            Vec2::new(layout.control_x, row_y - 10.0),
-            Vec2::new(layout.control_w, 46.0),
-        ) {
+        let primary_pos = Vec2::new(layout.control_x, row_y - 12.0);
+        let secondary_pos = primary_pos + Vec2::new(key_w + gap, 0.0);
+        let key_size = Vec2::new(key_w, 46.0);
+
+        if rect_hit(pos, primary_pos, key_size) || rect_hit(pos, secondary_pos, key_size) {
             return OptionsClick::Bind(*key);
         }
     }
@@ -460,7 +467,7 @@ fn audio_hit(pos: Vec2, layout: &OptionsLayout) -> OptionsClick {
 fn options_content_layout(width: f32, height: f32) -> OptionsLayout {
     let left = options_left(width);
     let side_w = options_side_width(width);
-    let content_left = (width * 0.29).max(left + side_w + (width * 0.075).clamp(42.0, 92.0));
+    let content_left = (width * 0.29).max(left + side_w + (width * 0.06).clamp(44.0, 78.0));
     let content_right = if options_show_scrollbar(width, height) {
         (width * 0.745).min(width - options_left(width) - 96.0)
     } else {
@@ -469,10 +476,10 @@ fn options_content_layout(width: f32, height: f32) -> OptionsLayout {
     let content_w = (content_right - content_left).clamp(260.0, 920.0);
     let content_top = (height * 0.085).clamp(58.0, 92.0);
     let vertical = ((height - content_top - 80.0) / 920.0).clamp(0.68, 1.0);
-    let control_x = content_left + content_w * 0.48;
-    let max_control_w = (content_w * 0.54).max(160.0);
+    let control_x = content_left + content_w * 0.33;
+    let max_control_w = (content_w * 0.42).clamp(190.0, 420.0);
     let min_control_w = 160.0_f32.min(max_control_w);
-    let control_w = (content_right - control_x).clamp(min_control_w, max_control_w);
+    let control_w = (content_right - control_x - 12.0).clamp(min_control_w, max_control_w);
 
     OptionsLayout {
         left: content_left,
@@ -511,7 +518,7 @@ fn menu_left(width: f32) -> f32 {
 }
 
 fn menu_button_gap(height: f32) -> f32 {
-    (height * 0.017).clamp(14.0, 22.0)
+    (height * 0.012).clamp(10.0, 14.0)
 }
 
 fn social_y(height: f32) -> f32 {

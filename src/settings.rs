@@ -53,7 +53,7 @@ pub enum OptionsClick {
     None,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolution {
     pub width: u32,
     pub height: u32,
@@ -105,10 +105,7 @@ impl Settings {
         Self {
             show_fps: true,
             display_mode: DisplayMode::Borderless,
-            resolution: Resolution {
-                width: 0,
-                height: 0,
-            },
+            resolution: Resolution::default(),
             resolutions: fallback_resolutions(),
             master_volume: 100,
             sfx_volume: 100,
@@ -169,6 +166,9 @@ impl Settings {
         if resolutions.is_empty() {
             resolutions = fallback_resolutions();
         }
+        if self.resolution.is_valid() {
+            resolutions.push(self.resolution);
+        }
         // Present the native and common modes from largest to smallest for predictable selection.
         resolutions.sort_by_key(|resolution| {
             std::cmp::Reverse((
@@ -186,6 +186,19 @@ impl Settings {
                 .unwrap_or_else(Resolution::default);
         }
         self.resolutions = resolutions;
+    }
+
+    pub fn set_current_resolution(&mut self, resolution: Resolution) {
+        if !resolution.is_valid() {
+            return;
+        }
+
+        self.resolution = resolution;
+        if !self.resolutions.contains(&resolution) {
+            self.resolutions.push(resolution);
+            let resolutions = std::mem::take(&mut self.resolutions);
+            self.set_resolutions(resolutions);
+        }
     }
 }
 
@@ -217,6 +230,10 @@ impl Resolution {
 
     pub fn label(self) -> String {
         format!("{} x {}", self.width, self.height)
+    }
+
+    fn is_valid(self) -> bool {
+        self.width > 0 && self.height > 0
     }
 }
 
@@ -348,5 +365,27 @@ mod tests {
         assert!(!settings.is_rebindable(KeyCode::Escape));
         assert!(!settings.is_rebindable(KeyCode::F1));
         assert!(settings.is_rebindable(KeyCode::KeyQ));
+    }
+
+    #[test]
+    fn default_resolution_is_valid() {
+        let settings = Settings::new();
+
+        assert_eq!(settings.resolution, Resolution::default());
+        assert!(settings.resolution.is_valid());
+    }
+
+    #[test]
+    fn current_resolution_is_selected_and_available() {
+        let mut settings = Settings::new();
+        let current = Resolution {
+            width: 1919,
+            height: 1079,
+        };
+
+        settings.set_current_resolution(current);
+
+        assert_eq!(settings.resolution, current);
+        assert!(settings.resolutions.contains(&current));
     }
 }

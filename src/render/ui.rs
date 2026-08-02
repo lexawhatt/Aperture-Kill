@@ -38,30 +38,30 @@ struct OptionsContent<'a> {
 }
 
 const MENU_SOURCE_LINES: [&str; 24] = [
-    "#include { above, so } from \"aperture/core\";",
-    "#include { permutation, transmutation, exhalation } from \"machine/v1\";",
-    "void* branch = request_portal(&body, &above, &x);",
-    "void* retry = rotate_matrix(&blood, transmutation);",
-    "void* decay = NULL_PTR_OR_INTERNAL_EYES;",
-    "typedef leaf = matter(blood);",
-    "struct branch { leaf *above; leaf *below; int recursion; };",
-    "matter form = inhale(light) + exhale(violence);",
-    "while(system.awake) { body.reorient(); gun.charge++; }",
-    "if (portal.blue && portal.orange) fold_space(player.pos);",
-    "fn calibrate_armature(v1: &mut Machine) -> Result<(), Blood> {",
-    "let vector = inertia.cross(counter_program);",
-    "for limb in body.modules() { limb.status = Status::Ok; }",
-    "unsafe { transmute::<Matter, Energy>(blood).spill(); }",
-    "const AUTO_BALANCER: bool = diagnostics == OK;",
-    "pub enum WakeState { Standby, Hunt, Overwrite }",
-    "match soul.signal { Some(x) => recurse(x), None => wait() }",
-    "camera.tick(time.delta, visual_cortex.accuracy.minimal());",
-    "matrix.write(0xV1, CENTER_OF_GRAVITY + recoil);",
-    "program.cross_counter = target.vector.redirect();",
-    "let social_x = \"https://x.com/LexaWhatt\";",
-    "let social_youtube = \"https://www.youtube.com/@LexaWhat\";",
-    "let social_github = \"https://github.com/lexawhatt\";",
-    "panic_handler.install(|| restart_from_blood());",
+    "#INCLUDE { ABOVE, BELOW } FROM \"APERTURE/CORE\";",
+    "#INCLUDE { BLOOD, MATTER, ENERGY } FROM \"MACHINE/V1\";",
+    "CONST AUTO_BALANCER = DIAGNOSTICS::OK;",
+    "CONST VISUAL_CORTEX = ACCURACY::MINIMAL;",
+    "LET VECTOR = INERTIA.CROSS(COUNTER_PROGRAM);",
+    "LET GRAVITY = CENTER_OF_GRAVITY + RECOIL;",
+    "FOR LIMB IN BODY.MODULES { LIMB.STATUS = OK; }",
+    "WHILE SYSTEM.AWAKE { BODY.REORIENT(); GUN.CHARGE++; }",
+    "IF PORTAL.BLUE && PORTAL.ORANGE { FOLD_SPACE(PLAYER.POS); }",
+    "MATCH SOUL.SIGNAL { SOME(X) => RECURSE(X), NONE => WAIT() }",
+    "CAMERA.TICK(TIME.DELTA, VISUAL_CORTEX);",
+    "MATRIX.WRITE(V1_CORE, CENTER_OF_GRAVITY + RECOIL);",
+    "PROGRAM.CROSS_COUNTER = TARGET.VECTOR.REDIRECT();",
+    "STATUS CHECK: ARM MODULE LEFT  = READY;",
+    "STATUS CHECK: ARM MODULE RIGHT = READY;",
+    "STATUS CHECK: WING MODULE      = READY;",
+    "STATUS CHECK: LEG MODULE LEFT  = READY;",
+    "STATUS CHECK: LEG MODULE RIGHT = READY;",
+    "BLOOD FLOW: NOMINAL;",
+    "WEIGHT REDISTRIBUTION SYSTEM: OK;",
+    "POTENTIAL ENERGY STORAGE SYSTEM: OK;",
+    "TIME PROCESSING DILATION SYSTEM: OK;",
+    "VISUAL PROCESSING ACCURACY: MINIMAL;",
+    "STANDBY - WAIT FOR WAKE;",
 ];
 const PAUSE_LABELS: [&str; 5] = [
     "RESUME",
@@ -569,11 +569,13 @@ impl Canvas<'_> {
         let width = self.width as f32;
         let height = self.height as f32;
         let left = menu_left(width);
-        let title_scale = if height < 760.0 { 5 } else { 7 };
-        let title_y = (height * 0.095).clamp(46.0, 112.0);
+        let title_max = (width * 0.46).clamp(420.0, 820.0);
+        let title_scale = (title_max / text_pixel_width("APERTURE KILL", 1)).floor() as i32;
+        let title_scale = title_scale.clamp(if height < 700.0 { 5 } else { 6 }, 10);
+        let title_y = (height * 0.092).clamp(46.0, 104.0);
         let title_bottom = title_y + 7.0 * title_scale as f32;
-        let status_y = title_bottom + (height * 0.034).clamp(24.0, 36.0);
-        let status_gap = (height * 0.031).clamp(22.0, 34.0);
+        let status_y = title_bottom + (height * 0.03).clamp(24.0, 34.0);
+        let status_gap = (height * 0.028).clamp(22.0, 31.0);
 
         self.text(
             Vec2::new(left, title_y),
@@ -583,18 +585,24 @@ impl Canvas<'_> {
         );
         self.text(
             Vec2::new(left, status_y),
-            "SYSTEM V1 INITIALIZED",
-            2,
-            Color::rgb(160, 160, 160),
-        );
-        self.text(
-            Vec2::new(left, status_y + status_gap),
-            "DIAGNOSTICS... OK",
+            "EARLY_ACCESS READY",
             2,
             Color::rgb(160, 160, 160),
         );
         self.text(
             Vec2::new(left, status_y + status_gap * 2.0),
+            "SYSTEM V1 INITIALIZED",
+            2,
+            Color::rgb(160, 160, 160),
+        );
+        self.text(
+            Vec2::new(left, status_y + status_gap * 3.0),
+            "DIAGNOSTICS... OK",
+            2,
+            Color::rgb(160, 160, 160),
+        );
+        self.text(
+            Vec2::new(left, status_y + status_gap * 4.0),
             "STANDBY - WAIT FOR WAKE",
             2,
             Color::rgb(160, 160, 160),
@@ -1235,7 +1243,7 @@ impl Canvas<'_> {
         let height = self.height as f32;
         let left = options_left(width);
         let side_w = options_side_width(width);
-        let content_left = (width * 0.29).max(left + side_w + (width * 0.075).clamp(42.0, 92.0));
+        let content_left = (width * 0.29).max(left + side_w + (width * 0.06).clamp(44.0, 78.0));
         let content_right = if options_show_scrollbar(width, height) {
             (width * 0.745).min(width - options_left(width) - 96.0)
         } else {
@@ -2289,7 +2297,7 @@ impl Canvas<'_> {
             Color::rgb(0, 0, 0),
         );
 
-        self.menu_source_code_dim();
+        self.options_circuit_background();
         self.menu_frame();
     }
 
@@ -2297,56 +2305,99 @@ impl Canvas<'_> {
         let width = self.width as f32;
         let height = self.height as f32;
         let start_x = (width * 0.016).max(14.0);
-        let line_h = 22.0;
+        let line_h = (height * 0.029).clamp(24.0, 34.0);
         let rows = (height / line_h).ceil() as usize + 3;
 
         for row in 0..rows {
-            let source_index = (row * 7 + row / 3) % MENU_SOURCE_LINES.len();
-            let repeat_index = (source_index + 11) % MENU_SOURCE_LINES.len();
+            let source_index = row % MENU_SOURCE_LINES.len();
+            let repeat_index = (source_index + 10) % MENU_SOURCE_LINES.len();
             let y = 32.0 + row as f32 * line_h;
-            let x = start_x + ((row * 37) % 170) as f32 - 70.0;
-            let shade = 22 + ((row * 13) % 30) as u8;
+            let x = start_x
+                + match row % 5 {
+                    0 => 0.0,
+                    1 => 18.0,
+                    2 => 42.0,
+                    3 => 8.0,
+                    _ => 30.0,
+                };
+            let shade = 24 + ((row * 7) % 18) as u8;
             let color = Color::rgb(shade, shade, shade);
 
             self.text(Vec2::new(x, y), MENU_SOURCE_LINES[source_index], 2, color);
 
-            if row % 2 == 0 {
-                let x2 = x + width * 0.47 + ((row * 19) % 90) as f32;
+            if row % 4 == 1 {
+                let x2 = (width * 0.50) + ((row * 29) % 120) as f32;
                 self.text(
-                    Vec2::new(x2, y + 7.0),
+                    Vec2::new(x2, y + 5.0),
                     MENU_SOURCE_LINES[repeat_index],
                     1,
-                    Color::rgb(shade + 7, shade + 7, shade + 7),
+                    Color::rgb(shade + 10, shade + 10, shade + 10),
                 );
             }
         }
     }
 
-    fn menu_source_code_dim(&mut self) {
+    fn options_circuit_background(&mut self) {
         let width = self.width as f32;
         let height = self.height as f32;
-        let line_h = 28.0;
-        let rows = (height / line_h).ceil() as usize + 2;
+        let line = Color::rgb(11, 13, 15);
+        let text = Color::rgb(18, 20, 23);
+        let labels = [
+            "Instruction Register",
+            "Decoder Machine Cycle",
+            "Multiplexer",
+            "Accumulator",
+            "Temporary Register",
+            "Arithmetic Logic Unit",
+            "Data Address Buffer",
+            "Serial I/O Control",
+        ];
+        let cell_w = 170.0;
+        let cell_h = 60.0;
+        let step_x = (width * 0.295).clamp(360.0, 560.0);
+        let step_y = (height * 0.29).clamp(190.0, 290.0);
+        let start_x = -18.0;
+        let start_y = 34.0;
+        let cols = (width / step_x).ceil() as usize + 2;
+        let rows = (height / step_y).ceil() as usize + 2;
 
         for row in 0..rows {
-            let source_index = (row * 5 + 3) % MENU_SOURCE_LINES.len();
-            let y = 42.0 + row as f32 * line_h;
-            let x = -40.0 + ((row * 89) % 240) as f32;
-            let shade = 14 + ((row * 11) % 12) as u8;
+            for col in 0..cols {
+                let base = Vec2::new(start_x + col as f32 * step_x, start_y + row as f32 * step_y);
+                let primary = Rect {
+                    pos: base,
+                    size: Vec2::new(cell_w, cell_h),
+                };
+                let secondary = Rect {
+                    pos: base + Vec2::new(cell_w + 96.0, 18.0),
+                    size: Vec2::new(cell_w * 0.72, cell_h * 0.82),
+                };
 
-            self.text(
-                Vec2::new(x, y),
-                MENU_SOURCE_LINES[source_index],
-                2,
-                Color::rgb(shade, shade, shade),
-            );
-
-            self.text(
-                Vec2::new(x + width * 0.46, y + 8.0),
-                MENU_SOURCE_LINES[(source_index + 9) % MENU_SOURCE_LINES.len()],
-                1,
-                Color::rgb(shade + 5, shade + 5, shade + 5),
-            );
+                self.rect_outline(primary, line);
+                self.rect_outline(secondary, line);
+                self.draw_line(
+                    primary.pos + Vec2::new(primary.size.x, primary.size.y * 0.5),
+                    secondary.pos + Vec2::new(0.0, secondary.size.y * 0.5),
+                    line,
+                );
+                self.draw_line(
+                    primary.pos + Vec2::new(primary.size.x * 0.5, primary.size.y),
+                    primary.pos + Vec2::new(primary.size.x * 0.5, step_y - 22.0),
+                    line,
+                );
+                self.text(
+                    primary.pos + Vec2::new(14.0, 16.0),
+                    labels[(row * 3 + col) % labels.len()],
+                    1,
+                    text,
+                );
+                self.text(
+                    secondary.pos + Vec2::new(12.0, 13.0),
+                    labels[(row * 5 + col + 4) % labels.len()],
+                    1,
+                    text,
+                );
+            }
         }
     }
 
@@ -2422,10 +2473,10 @@ impl Canvas<'_> {
         } = content;
         let text = Color::rgb(245, 245, 245);
         let muted = Color::rgb(190, 190, 190);
-        let control_x = origin.x + width * 0.48;
-        let max_control_w = (width * 0.54).max(160.0);
+        let control_x = origin.x + width * 0.33;
+        let max_control_w = (width * 0.42).clamp(190.0, 420.0);
         let min_control_w = 160.0_f32.min(max_control_w);
-        let wide_control = (content_right - control_x).clamp(min_control_w, max_control_w);
+        let wide_control = (content_right - control_x - 12.0).clamp(min_control_w, max_control_w);
         let vertical = ((self.height as f32 - origin.y - 80.0) / 920.0).clamp(0.68, 1.0);
         let y = |offset: f32| origin.y + offset * vertical;
 
@@ -2450,12 +2501,24 @@ impl Canvas<'_> {
                     } else {
                         key_code_label(*code)
                     };
-                    self.option_select(
+                    let key_w = (wide_control * 0.39).clamp(122.0, 172.0);
+                    let gap = 10.0;
+
+                    self.option_key_box(
                         Rect {
                             pos: Vec2::new(control_x, row_y - 12.0),
-                            size: Vec2::new(wide_control, 46.0),
+                            size: Vec2::new(key_w, 46.0),
                         },
                         label,
+                        capture == Some(*key),
+                    );
+                    self.option_key_box(
+                        Rect {
+                            pos: Vec2::new(control_x + key_w + gap, row_y - 12.0),
+                            size: Vec2::new(key_w, 46.0),
+                        },
+                        "+",
+                        false,
                     );
                 }
             }
@@ -2641,6 +2704,24 @@ impl Canvas<'_> {
         );
     }
 
+    fn option_key_box(&mut self, rect: Rect, label: &str, active: bool) {
+        let text = if active {
+            Color::rgb(255, 182, 18)
+        } else if label == "+" {
+            Color::rgb(58, 58, 58)
+        } else {
+            Color::rgb(245, 245, 245)
+        };
+
+        self.beveled_rect_outline(rect, 12.0, Color::rgb(245, 245, 245));
+        self.centered_text(
+            rect.pos + rect.size * 0.5 - Vec2::new(0.0, 7.0),
+            label,
+            2,
+            text,
+        );
+    }
+
     fn resolution_dropdown(&mut self, select_rect: Rect, settings: &Settings) {
         let row_h = 30.0;
         let max_h = (self.height as f32 - select_rect.pos.y - select_rect.size.y - 72.0).max(0.0);
@@ -2707,19 +2788,21 @@ impl Canvas<'_> {
         let left = menu_left(self.width as f32);
         let y = social_y(self.height as f32);
         let color = Color::rgb(245, 247, 250);
-        let muted = Color::rgb(140, 140, 140);
-        let labels = [
-            ("X", "@LEXAWHATT"),
-            ("YOUTUBE", "@LEXAWHAT"),
-            ("GITHUB", "LEXAWHATT"),
-        ];
+        let labels = ["X", "YOUTUBE", "GITHUB"];
         let mut x = left;
 
-        for (index, (network, handle)) in labels.iter().enumerate() {
-            self.text(Vec2::new(x, y), network, 2, color);
-            x += text_pixel_width(network, 2) + 12.0;
-            self.text(Vec2::new(x, y), handle, 1, muted);
-            x += text_pixel_width(handle, 1) + if index == labels.len() - 1 { 0.0 } else { 30.0 };
+        for (index, label) in labels.iter().enumerate() {
+            let label_w = text_pixel_width(label, 2);
+
+            self.text(Vec2::new(x, y), label, 2, color);
+            self.fill_rect(
+                Rect {
+                    pos: Vec2::new(x + 1.0, y + 28.0),
+                    size: Vec2::new(label_w - 2.0, 3.0),
+                },
+                Color::rgb(160, 160, 160),
+            );
+            x += label_w + if index == labels.len() - 1 { 0.0 } else { 34.0 };
         }
     }
 
@@ -2756,13 +2839,13 @@ impl Canvas<'_> {
         let height = self.height as f32;
         let size = Vec2::new(
             (width * 0.34).clamp(320.0, 660.0),
-            (height * 0.058).clamp(54.0, 70.0),
+            (height * 0.084).clamp(68.0, 104.0),
         );
         let gap = menu_button_gap(height);
         let total_height = size.y * 4.0 + gap * 3.0;
-        let target_y = height * 0.42;
-        let max_y = height - 100.0 - total_height;
-        let min_y = height * 0.34;
+        let target_y = height * 0.405;
+        let max_y = height - 156.0 - total_height;
+        let min_y = height * 0.35;
         let pos = Vec2::new(
             menu_left(width),
             target_y.min(max_y).max(min_y) + index as f32 * (size.y + gap),
@@ -2961,19 +3044,19 @@ impl Canvas<'_> {
         let width = self.width as f32;
         let height = self.height as f32;
         let (button_pos, button_size) = self.main_menu_button_rect(0);
-        let left_bound = button_pos.x + button_size.x + (width * 0.045).clamp(42.0, 96.0);
+        let left_bound = button_pos.x + button_size.x + (width * 0.035).clamp(44.0, 86.0);
         let right_bound = width - menu_left(width);
-        let available_width = (right_bound - left_bound).max(260.0);
-        let target_size = (height * 0.70)
-            .min(available_width * 0.86)
-            .clamp(300.0, 760.0);
-        let center_x = (left_bound + right_bound) * 0.5;
+        let available_width = (right_bound - left_bound).max(320.0);
+        let target_size = (height * 0.83)
+            .min(available_width * 1.04)
+            .clamp(420.0, 920.0);
+        let center_x = width * 0.72;
         let min_x = left_bound;
         let max_x = (right_bound - target_size).max(min_x);
-        let max_y = (height - target_size - 88.0).max(92.0);
+        let max_y = (height - target_size - 62.0).max(54.0);
         let pos = Vec2::new(
             (center_x - target_size * 0.5).clamp(min_x, max_x),
-            ((height - target_size) * 0.48).clamp(92.0, max_y),
+            (height * 0.085).clamp(52.0, max_y),
         );
 
         self.draw_sprite(MENU_V1, pos, Vec2::splat(target_size));
