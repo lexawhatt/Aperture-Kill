@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::time::Duration;
 
 use glam::Vec2;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
@@ -11,7 +12,8 @@ const DOOR_CLOSE: &[u8] = include_bytes!("../../assets/sounds/door_close.wav");
 const FOOTSTEP_1: &[u8] = include_bytes!("../../assets/sounds/footstep_stone1.wav");
 const FOOTSTEP_2: &[u8] = include_bytes!("../../assets/sounds/footstep_stone2.wav");
 const FOOTSTEP_3: &[u8] = include_bytes!("../../assets/sounds/footstep_stone3.wav");
-const JUMP: &[u8] = include_bytes!("../../assets/sounds/jump.wav");
+const JUMP_LAND: &[u8] = include_bytes!("../../assets/sounds/jump_land.wav");
+const JUMP_LAND_SPLIT_SECS: f32 = 1.184_218;
 const DASH: &[u8] = include_bytes!("../../assets/sounds/dash.wav");
 const SLIDE: &[u8] = include_bytes!("../../assets/sounds/slide.wav");
 const GROUND_SLAM: &[u8] = include_bytes!("../../assets/sounds/ground_slam.wav");
@@ -31,9 +33,80 @@ const PIERCER_SHOT_3: &[u8] = include_bytes!("../../assets/sounds/weapons/Shoot1
 const FILTH_BITE: &[u8] =
     include_bytes!("../../assets/sounds/enemies/Zombie_Weak_Death_Reverse.wav");
 
-struct OneShotSound {
+// Per-file calibration. Set loudness below 1.0 to quiet a file, pitch below 1.0 to lower it.
+const DOOR_OPEN_SOUND: SoundAsset = SoundAsset::new(DOOR_OPEN, 1.0, 1.0);
+const DOOR_CLOSE_SOUND: SoundAsset = SoundAsset::new(DOOR_CLOSE, 1.0, 1.0);
+const FOOTSTEP_1_SOUND: SoundAsset = SoundAsset::new(FOOTSTEP_1, 1.0, 1.0);
+const FOOTSTEP_2_SOUND: SoundAsset = SoundAsset::new(FOOTSTEP_2, 1.0, 1.0);
+const FOOTSTEP_3_SOUND: SoundAsset = SoundAsset::new(FOOTSTEP_3, 1.0, 1.0);
+const JUMP_LAND_SOUND: SoundAsset = SoundAsset::new(JUMP_LAND, 0.55, 1.0);
+const DASH_SOUND: SoundAsset = SoundAsset::new(DASH, 1.0, 1.0);
+const SLIDE_SOUND: SoundAsset = SoundAsset::new(SLIDE, 1.0, 1.0);
+const GROUND_SLAM_SOUND: SoundAsset = SoundAsset::new(GROUND_SLAM, 1.0, 1.0);
+const LAND_HEAVY_SOUND: SoundAsset = SoundAsset::new(LAND_HEAVY, 1.0, 1.0);
+const MENU_MUSIC_SOUND: SoundAsset = SoundAsset::new(MENU_MUSIC, 1.0, 1.0);
+const PORTAL_FIRE_SOUND: SoundAsset = SoundAsset::new(PORTAL_FIRE, 1.0, 1.0);
+const PORTAL_PLACE_SOUND: SoundAsset = SoundAsset::new(PORTAL_PLACE, 1.0, 1.0);
+const V1_HURT_SOUND: SoundAsset = SoundAsset::new(V1_HURT, 1.0, 1.0);
+const DEATH_SEQUENCE_SOUND: SoundAsset = SoundAsset::new(DEATH_SEQUENCE, 1.0, 1.0);
+const DEATH_SKULL_SOUND: SoundAsset = SoundAsset::new(DEATH_SKULL, 1.0, 1.0);
+const DEATH_CAMERA_CUT_SOUND: SoundAsset = SoundAsset::new(DEATH_CAMERA_CUT, 1.0, 1.0);
+const PIERCER_CHARGE_SOUND: SoundAsset = SoundAsset::new(PIERCER_CHARGE, 1.0, 1.0);
+const PIERCER_SHOT_1_SOUND: SoundAsset = SoundAsset::new(PIERCER_SHOT_1, 1.0, 1.0);
+const PIERCER_SHOT_2_SOUND: SoundAsset = SoundAsset::new(PIERCER_SHOT_2, 1.0, 1.0);
+const PIERCER_SHOT_3_SOUND: SoundAsset = SoundAsset::new(PIERCER_SHOT_3, 1.0, 1.0);
+const FILTH_BITE_SOUND: SoundAsset = SoundAsset::new(FILTH_BITE, 1.0, 1.0);
+
+#[derive(Clone, Copy)]
+struct SoundAsset {
     bytes: &'static [u8],
+    loudness: f32,
+    pitch: f32,
+}
+
+impl SoundAsset {
+    const fn new(bytes: &'static [u8], loudness: f32, pitch: f32) -> Self {
+        Self {
+            bytes,
+            loudness,
+            pitch,
+        }
+    }
+
+    fn volume(self, base_volume: f32) -> f32 {
+        base_volume * self.loudness.max(0.0)
+    }
+
+    fn pitch(self) -> f32 {
+        self.pitch.max(0.01)
+    }
+}
+
+struct OneShotSound {
+    asset: SoundAsset,
     volume: f32,
+    start_secs: f32,
+    duration_secs: Option<f32>,
+}
+
+impl OneShotSound {
+    fn full(asset: SoundAsset, volume: f32) -> Self {
+        Self {
+            asset,
+            volume,
+            start_secs: 0.0,
+            duration_secs: None,
+        }
+    }
+
+    fn clip(asset: SoundAsset, volume: f32, start_secs: f32, duration_secs: Option<f32>) -> Self {
+        Self {
+            asset,
+            volume,
+            start_secs,
+            duration_secs,
+        }
+    }
 }
 
 pub(super) struct Audio {
@@ -154,17 +227,17 @@ impl Audio {
             return;
         };
 
-        self.play_one_shot(sound.bytes, sound.volume);
+        self.play_one_shot(sound);
     }
 
     fn handle_control_event(&mut self, event: SoundEvent, listener: Vec2) -> bool {
         match event {
             SoundEvent::DoorOpen { index, pos } => {
-                self.start_door(index, DOOR_OPEN, 1.0 * attenuation(pos, listener));
+                self.start_door(index, DOOR_OPEN_SOUND, 1.0 * attenuation(pos, listener));
                 true
             }
             SoundEvent::DoorClose { index, pos } => {
-                self.start_door(index, DOOR_CLOSE, 1.0 * attenuation(pos, listener));
+                self.start_door(index, DOOR_CLOSE_SOUND, 1.0 * attenuation(pos, listener));
                 true
             }
             SoundEvent::DoorStop { index } => {
@@ -173,14 +246,17 @@ impl Audio {
                 true
             }
             SoundEvent::DashStart(pos) => {
-                self.play_one_shot(DASH, 0.92 * attenuation(pos, listener));
+                self.play_one_shot(OneShotSound::full(
+                    DASH_SOUND,
+                    0.92 * attenuation(pos, listener),
+                ));
                 true
             }
             SoundEvent::DashEnd => true,
             SoundEvent::SlideStart(pos) => {
                 self.start_action(
                     ActionSound::Slide,
-                    SLIDE,
+                    SLIDE_SOUND,
                     0.42 * attenuation(pos, listener),
                     true,
                 );
@@ -193,7 +269,7 @@ impl Audio {
             SoundEvent::GroundSlamStart(pos) => {
                 self.start_action(
                     ActionSound::GroundSlam,
-                    GROUND_SLAM,
+                    GROUND_SLAM_SOUND,
                     0.42 * attenuation(pos, listener),
                     true,
                 );
@@ -206,7 +282,7 @@ impl Audio {
             SoundEvent::PiercerChargeStart(pos) => {
                 self.start_action(
                     ActionSound::PiercerCharge,
-                    PIERCER_CHARGE,
+                    PIERCER_CHARGE_SOUND,
                     0.64 * attenuation(pos, listener),
                     true,
                 );
@@ -219,12 +295,12 @@ impl Audio {
             SoundEvent::DeathSequence => {
                 self.stop_actions();
                 self.stop_death();
-                self.start_death_sound(DeathSound::CameraCut, DEATH_CAMERA_CUT, 0.72);
-                self.start_death_sound(DeathSound::Sequence, DEATH_SEQUENCE, 0.94);
+                self.start_death_sound(DeathSound::CameraCut, DEATH_CAMERA_CUT_SOUND, 0.72);
+                self.start_death_sound(DeathSound::Sequence, DEATH_SEQUENCE_SOUND, 0.94);
                 true
             }
             SoundEvent::DeathSkull => {
-                self.start_death_sound(DeathSound::Skull, DEATH_SKULL, 0.86);
+                self.start_death_sound(DeathSound::Skull, DEATH_SKULL_SOUND, 0.86);
                 true
             }
             SoundEvent::DeathStop => {
@@ -236,18 +312,33 @@ impl Audio {
     }
 
     fn one_shot_sound(&mut self, event: SoundEvent, listener: Vec2) -> Option<OneShotSound> {
-        let (bytes, volume) = match event {
+        let sound = match event {
             SoundEvent::Footstep(index, pos) => {
-                (footstep_sound(index), 0.48 * attenuation(pos, listener))
+                OneShotSound::full(footstep_sound(index), 0.48 * attenuation(pos, listener))
             }
-            SoundEvent::Jump(pos) => (JUMP, 0.78 * attenuation(pos, listener)),
-            SoundEvent::HeavyLand(pos) => (LAND_HEAVY, 0.72 * attenuation(pos, listener)),
-            SoundEvent::PortalFire(pos) => (PORTAL_FIRE, 0.72 * attenuation(pos, listener)),
-            SoundEvent::PortalPlace(pos) => (PORTAL_PLACE, 0.82 * attenuation(pos, listener)),
-            SoundEvent::PlayerHurt(pos) => (V1_HURT, 0.84 * attenuation(pos, listener)),
-            SoundEvent::FilthBite(pos) => (FILTH_BITE, 0.76 * attenuation(pos, listener)),
+            SoundEvent::Jump(pos) => OneShotSound::clip(
+                JUMP_LAND_SOUND,
+                0.78 * attenuation(pos, listener),
+                0.0,
+                Some(JUMP_LAND_SPLIT_SECS),
+            ),
+            SoundEvent::HeavyLand(pos) => {
+                OneShotSound::full(LAND_HEAVY_SOUND, 0.72 * attenuation(pos, listener))
+            }
+            SoundEvent::PortalFire(pos) => {
+                OneShotSound::full(PORTAL_FIRE_SOUND, 0.72 * attenuation(pos, listener))
+            }
+            SoundEvent::PortalPlace(pos) => {
+                OneShotSound::full(PORTAL_PLACE_SOUND, 0.82 * attenuation(pos, listener))
+            }
+            SoundEvent::PlayerHurt(pos) => {
+                OneShotSound::full(V1_HURT_SOUND, 0.84 * attenuation(pos, listener))
+            }
+            SoundEvent::FilthBite(pos) => {
+                OneShotSound::full(FILTH_BITE_SOUND, 0.76 * attenuation(pos, listener))
+            }
             SoundEvent::PiercerFire(pos) | SoundEvent::PiercerCharged(pos) => {
-                (self.next_piercer_shot(), 0.72 * attenuation(pos, listener))
+                OneShotSound::full(self.next_piercer_shot(), 0.72 * attenuation(pos, listener))
             }
             SoundEvent::Land
             | SoundEvent::DoorOpen { .. }
@@ -266,25 +357,43 @@ impl Audio {
             | SoundEvent::DeathStop => return None,
         };
 
-        Some(OneShotSound { bytes, volume })
+        Some(sound)
     }
 
-    fn play_one_shot(&self, bytes: &'static [u8], volume: f32) {
+    fn play_one_shot(&self, sound: OneShotSound) {
+        let volume = sound.asset.volume(sound.volume);
         if volume <= 0.01 {
             return;
         }
         let Some(handle) = self.handle.as_ref() else {
             return;
         };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+        let Ok(decoder) = Decoder::new(Cursor::new(sound.asset.bytes)) else {
             return;
         };
         let Ok(sink) = Sink::try_new(handle) else {
             return;
         };
 
+        let start = Duration::from_secs_f32(sound.start_secs.max(0.0));
         sink.set_volume(self.sfx_sink_volume());
-        sink.append(decoder.amplify(volume));
+        if let Some(duration_secs) = sound.duration_secs {
+            let duration = Duration::from_secs_f32(duration_secs.max(0.0));
+            sink.append(
+                decoder
+                    .skip_duration(start)
+                    .take_duration(duration)
+                    .speed(sound.asset.pitch())
+                    .amplify(volume),
+            );
+        } else {
+            sink.append(
+                decoder
+                    .skip_duration(start)
+                    .speed(sound.asset.pitch())
+                    .amplify(volume),
+            );
+        }
         // One-shots own themselves until playback ends; looping sounds stay in Audio for stopping.
         sink.detach();
     }
@@ -299,16 +408,17 @@ impl Audio {
         }
     }
 
-    fn start_death_sound(&mut self, sound: DeathSound, bytes: &'static [u8], volume: f32) {
+    fn start_death_sound(&mut self, sound: DeathSound, asset: SoundAsset, base_volume: f32) {
         self.stop_death_sound(sound);
 
+        let volume = asset.volume(base_volume);
         if volume <= 0.01 {
             return;
         }
         let Some(handle) = self.handle.as_ref() else {
             return;
         };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+        let Ok(decoder) = Decoder::new(Cursor::new(asset.bytes)) else {
             return;
         };
         let Ok(sink) = Sink::try_new(handle) else {
@@ -316,7 +426,7 @@ impl Audio {
         };
 
         sink.set_volume(self.sfx_sink_volume());
-        sink.append(decoder.amplify(volume));
+        sink.append(decoder.speed(asset.pitch()).amplify(volume));
         *self.death_sink(sound) = Some(sink);
     }
 
@@ -327,8 +437,8 @@ impl Audio {
     }
 
     pub(super) fn start_menu_ambience(&mut self) {
-        self.start_loop_if_missing(MenuLoop::Music, MENU_MUSIC, 0.34);
-        self.start_loop_if_missing(MenuLoop::Falling, GROUND_SLAM, 0.12);
+        self.start_loop_if_missing(MenuLoop::Music, MENU_MUSIC_SOUND, 0.34);
+        self.start_loop_if_missing(MenuLoop::Falling, GROUND_SLAM_SOUND, 0.12);
     }
 
     pub(super) fn stop_menu_ambience(&mut self) {
@@ -343,19 +453,20 @@ impl Audio {
     fn start_action(
         &mut self,
         action: ActionSound,
-        bytes: &'static [u8],
-        volume: f32,
+        asset: SoundAsset,
+        base_volume: f32,
         repeat: bool,
     ) {
         self.stop_action(action);
 
+        let volume = asset.volume(base_volume);
         if volume <= 0.01 {
             return;
         }
         let Some(handle) = self.handle.as_ref() else {
             return;
         };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+        let Ok(decoder) = Decoder::new(Cursor::new(asset.bytes)) else {
             return;
         };
         let Ok(sink) = Sink::try_new(handle) else {
@@ -364,21 +475,27 @@ impl Audio {
 
         sink.set_volume(self.sfx_sink_volume());
         if repeat {
-            sink.append(decoder.amplify(volume).repeat_infinite());
+            sink.append(
+                decoder
+                    .speed(asset.pitch())
+                    .amplify(volume)
+                    .repeat_infinite(),
+            );
         } else {
-            sink.append(decoder.amplify(volume));
+            sink.append(decoder.speed(asset.pitch()).amplify(volume));
         }
         *self.action_sink(action) = Some(sink);
     }
 
-    fn start_loop_if_missing(&mut self, sound: MenuLoop, bytes: &'static [u8], volume: f32) {
+    fn start_loop_if_missing(&mut self, sound: MenuLoop, asset: SoundAsset, base_volume: f32) {
+        let volume = asset.volume(base_volume);
         if self.menu_sink(sound).is_some() || volume <= 0.01 {
             return;
         }
         let Some(handle) = self.handle.as_ref() else {
             return;
         };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+        let Ok(decoder) = Decoder::new(Cursor::new(asset.bytes)) else {
             return;
         };
         let Ok(sink) = Sink::try_new(handle) else {
@@ -390,7 +507,12 @@ impl Audio {
             MenuLoop::Falling => self.sfx_sink_volume(),
         };
         sink.set_volume(sink_volume);
-        sink.append(decoder.amplify(volume).repeat_infinite());
+        sink.append(
+            decoder
+                .speed(asset.pitch())
+                .amplify(volume)
+                .repeat_infinite(),
+        );
         *self.menu_sink(sound) = Some(sink);
     }
 
@@ -406,16 +528,17 @@ impl Audio {
         }
     }
 
-    fn start_door(&mut self, index: usize, bytes: &'static [u8], volume: f32) {
+    fn start_door(&mut self, index: usize, asset: SoundAsset, base_volume: f32) {
         self.stop_door(index);
 
+        let volume = asset.volume(base_volume);
         if volume <= 0.01 {
             return;
         }
         let Some(handle) = self.handle.as_ref() else {
             return;
         };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+        let Ok(decoder) = Decoder::new(Cursor::new(asset.bytes)) else {
             return;
         };
         let Ok(sink) = Sink::try_new(handle) else {
@@ -423,7 +546,7 @@ impl Audio {
         };
 
         sink.set_volume(self.sfx_sink_volume());
-        sink.append(decoder.amplify(volume));
+        sink.append(decoder.speed(asset.pitch()).amplify(volume));
         self.doors.insert(index, sink);
     }
 
@@ -450,11 +573,11 @@ impl Audio {
         }
     }
 
-    fn next_piercer_shot(&mut self) -> &'static [u8] {
+    fn next_piercer_shot(&mut self) -> SoundAsset {
         let shot = match self.piercer_shot_index % 3 {
-            0 => PIERCER_SHOT_1,
-            1 => PIERCER_SHOT_2,
-            _ => PIERCER_SHOT_3,
+            0 => PIERCER_SHOT_1_SOUND,
+            1 => PIERCER_SHOT_2_SOUND,
+            _ => PIERCER_SHOT_3_SOUND,
         };
 
         self.piercer_shot_index = (self.piercer_shot_index + 1) % 3;
@@ -515,10 +638,10 @@ fn volume_factor(value: u8) -> f32 {
     f32::from(value.min(100)) / 100.0
 }
 
-fn footstep_sound(index: usize) -> &'static [u8] {
+fn footstep_sound(index: usize) -> SoundAsset {
     match index % 3 {
-        0 => FOOTSTEP_1,
-        1 => FOOTSTEP_2,
-        _ => FOOTSTEP_3,
+        0 => FOOTSTEP_1_SOUND,
+        1 => FOOTSTEP_2_SOUND,
+        _ => FOOTSTEP_3_SOUND,
     }
 }
