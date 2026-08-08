@@ -4,11 +4,12 @@ use glam::Vec2;
 
 use super::{
     DEFAULT_PLAYER_INTEREST_MARGIN_UNITS, DEFAULT_PORTAL_PHYSICS_MARGIN_UNITS,
-    DEFAULT_RENDER_GUARD_UNITS, chunk_bounds_for_key, chunk_key_for_world_runtime,
-    chunk_origin_for_key,
+    DEFAULT_RENDER_GUARD_UNITS, LevelPackage, LevelPackageError, PackageResult, WorldChunk,
+    WorldIndex, chunk_bounds_for_key, chunk_key_for_world_runtime, chunk_origin_for_key,
+    dequant_local_point, dequant_u16_units, dequant_unit_vec,
 };
 use crate::game::level::{Level, LevelObjectKind, Solid, WorldPortal};
-use crate::game::portal::Portal;
+use crate::game::portal::{Color, Portal};
 
 #[derive(Clone, Debug, Default)]
 pub struct GroupIndex {
@@ -217,6 +218,147 @@ impl WorldAabb {
     }
 }
 
+impl GroupIndex {
+    pub fn from_chunks(chunks: &[WorldChunk]) -> Self {
+        let mut index = Self::default();
+
+        for chunk in chunks {
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Solid,
+                &chunk.static_rects.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Hazard,
+                &chunk.hazard_rects.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Door,
+                &chunk.doors.rects.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Checkpoint,
+                &chunk.checkpoints.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Trigger,
+                &chunk.triggers.rects.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Enemy,
+                &chunk.enemy_spawns.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::Text,
+                &chunk.text_points.meta,
+            );
+            index.add_rect_block(
+                chunk.chunk_id,
+                LevelObjectKind::WorldPortal,
+                &chunk.world_portals.meta,
+            );
+        }
+
+        index
+    }
+
+    pub fn handles(&self, group_id: u16) -> &[ObjectHandle] {
+        self.groups.get(&group_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn contains_group(&self, group_id: u16) -> bool {
+        self.groups.contains_key(&group_id)
+    }
+
+    fn add_rect_block(&mut self, chunk_id: u32, kind: LevelObjectKind, metas: &[u16]) {
+        for (index, meta) in metas.iter().copied().enumerate() {
+            let group_id = group_id_from_surface_meta(meta);
+            if group_id == 0 {
+                continue;
+            }
+
+            self.groups.entry(group_id).or_default().push(ObjectHandle {
+                chunk_id,
+                kind,
+                index: index as u32,
+            });
+        }
+    }
+}
+
+impl TriggerIndex {
+    pub fn from_package(package: &LevelPackage) -> PackageResult<Self> {
+        Self::from_world_index(&package.index)
+    }
+
+    pub fn from_world_index(index: &WorldIndex) -> PackageResult<Self> {
+        let mut seen = BTreeSet::new();
+        let mut triggers = Vec::with_capacity(index.triggers.len());
+
+        for trigger in &index.triggers {
+            if !seen.insert(trigger.trigger_id) {
+                return Err(LevelPackageError::InvalidData(format!(
+                    "duplicate trigger_id {} in world.index",
+                    trigger.trigger_id
+                )));
+            }
+
+            triggers.push(TriggerRuntimeEntry {
+                trigger_id: trigger.trigger_id,
+                source_chunk: trigger.source_chunk,
+                target_group: trigger.target_group,
+                kind: trigger.kind,
+            });
+        }
+
+        Ok(Self { triggers })
+    }
+
+    pub fn for_target_group(
+        &self,
+        target_group: u16,
+    ) -> impl Iterator<Item = &TriggerRuntimeEntry> {
+        self.triggers
+            .iter()
+            .filter(move |trigger| target_group != 0 && trigger.target_group == target_group)
+    }
+}
+
+impl PortalIndex {
+    pub fn from_package(package: &LevelPackage) -> PackageResult<Self> {
+        Self::from_package_and_user_portals(package, &[None, None])
+    }
+
+    pub fn from_package_and_user_portals(
+        package: &LevelPackage,
+        portals: &[Option<Portal>; 2],
+    ) -> PackageResult<Self> {
+        Ok(Self {
+            world_portals: world_portal_runtimes_from_package(package)?,
+            user_portals: user_portal_runtimes(portals),
+        })
+    }
+
+    pub fn from_user_portals(portals: &[Option<Portal>; 2]) -> Self {
+        Self {
+            world_portals: Vec::new(),
+            user_portals: user_portal_runtimes(portals),
+        }
+    }
+
+    pub fn world_portal_by_id(&self, portal_id: u16) -> Option<&WorldPortalRuntime> {
+        self.world_portals
+            .iter()
+            .find(|portal| portal.source.id == portal_id)
+    }
+}
+
 impl WorldSpatialIndex {
     pub fn from_level(level: &Level) -> Self {
         let mut chunks = BTreeMap::<(i32, i32), WorldAabb>::new();
@@ -254,6 +396,128 @@ impl WorldSpatialIndex {
             .filter(|chunk| chunk.bounds.overlaps(rect))
             .map(|chunk| chunk.chunk_id)
             .collect()
+    }
+}
+
+fn group_id_from_surface_meta(meta: u16) -> u16 {
+    meta >> 6
+}
+
+fn world_portal_runtimes_from_package(
+    package: &LevelPackage,
+) -> PackageResult<Vec<WorldPortalRuntime>> {
+    package
+        .index
+        .portals
+        .iter()
+        .map(|anchor| {
+            let mut source =
+                world_portal_from_package(package, anchor.portal_id, anchor.source_chunk)?;
+            source.receiver_id = anchor.receiver_id;
+
+            Ok(WorldPortalRuntime {
+                source,
+                source_chunk: anchor.source_chunk,
+                receiver_id: anchor.receiver_id,
+                render: anchor.render,
+                lighting: anchor.lighting,
+                physics: anchor.physics,
+                render_depth: u8::from(anchor.render),
+                physics_margin: if anchor.physics {
+                    DEFAULT_PORTAL_PHYSICS_MARGIN_UNITS
+                } else {
+                    0.0
+                },
+                light_depth: u8::from(anchor.lighting),
+            })
+        })
+        .collect()
+}
+
+fn world_portal_from_package(
+    package: &LevelPackage,
+    portal_id: u16,
+    source_chunk: u32,
+) -> PackageResult<WorldPortal> {
+    let chunk = package
+        .chunks
+        .iter()
+        .find(|chunk| chunk.chunk_id == source_chunk)
+        .ok_or_else(|| {
+            LevelPackageError::InvalidData(format!(
+                "world portal {portal_id} references missing source chunk {source_chunk}"
+            ))
+        })?;
+
+    let index = (0..chunk.world_portals.x.len())
+        .find(|index| chunk.world_portals.portal_id[*index] == portal_id)
+        .ok_or_else(|| {
+            LevelPackageError::InvalidData(format!(
+                "world portal {portal_id} not found in source chunk {source_chunk}"
+            ))
+        })?;
+
+    Ok(world_portal_from_chunk(chunk, index))
+}
+
+fn world_portal_from_chunk(chunk: &WorldChunk, index: usize) -> WorldPortal {
+    let pos = dequant_local_point(
+        chunk.origin_q,
+        chunk.world_portals.x[index],
+        chunk.world_portals.y[index],
+    );
+    let normal = dequant_unit_vec(
+        chunk.world_portals.normal_x[index],
+        chunk.world_portals.normal_y[index],
+    );
+    let tangent = dequant_unit_vec(
+        chunk.world_portals.tangent_x[index],
+        chunk.world_portals.tangent_y[index],
+    );
+    let mut portal = Portal::with_tangent(
+        pos.x,
+        pos.y,
+        normal,
+        tangent,
+        dequant_u16_units(chunk.world_portals.width[index]),
+        Color::rgb(154, 120, 255),
+    );
+    let flags = chunk.world_portals.flags[index];
+
+    portal.scale = (chunk.world_portals.scale[index] as f32 / 256.0).max(0.01);
+    portal.scale_objects = flags & 0b0000_0001 != 0;
+
+    WorldPortal {
+        portal,
+        id: chunk.world_portals.portal_id[index],
+        receiver_id: chunk.world_portals.receiver_id[index],
+        priority: chunk.world_portals.priority[index],
+        seamless: flags & 0b0000_0010 != 0,
+        seamless_depth: dequant_u16_units(chunk.world_portals.seamless_depth[index]),
+        seamless_angle: chunk.world_portals.seamless_angle[index] as f32 / 10.0,
+        seamless_rely_on_walls: flags & 0b0000_0100 != 0,
+    }
+}
+
+fn user_portal_runtimes(portals: &[Option<Portal>; 2]) -> Vec<UserPortalRuntime> {
+    let [Some(first), Some(second)] = *portals else {
+        return Vec::new();
+    };
+
+    vec![
+        user_portal_runtime(first, second),
+        user_portal_runtime(second, first),
+    ]
+}
+
+fn user_portal_runtime(source: Portal, destination: Portal) -> UserPortalRuntime {
+    UserPortalRuntime {
+        source_anchor: source,
+        destination_anchor: destination,
+        traversal_width: source.active_width(),
+        physics_margin: DEFAULT_PORTAL_PHYSICS_MARGIN_UNITS,
+        render_remote_scene: false,
+        pass_lighting: false,
     }
 }
 

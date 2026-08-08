@@ -1,0 +1,5 @@
+portals_world version=4
+level name="CUSTOM LEVEL 3" spawn_x=128 spawn_y=320
+solid x=64 y=400 w=960 h=32 portalable=false surface=normal group_id=0 view_layer=1 editor_layer=0 rotation=0
+trigger kind=level_start x=104 y=280 w=48 h=80 group_id=0 editor_layer=0
+trigger kind=level_end x=920 y=320 w=48 h=80 group_id=0 editor_layer=0

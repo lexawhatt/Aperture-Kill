@@ -5,11 +5,12 @@ use glam::Vec2;
 
 use super::{
     CHUNK_DIR, CHUNK_SIZE_UNITS, COORD_SCALE, CheckpointAnchor, DEFAULT_VIEW_LAYER, LevelManifest,
-    LevelPackage, LevelSpec, PACKAGE_SCHEMA, WORLD_INDEX_PATH, WorldAabb, WorldChunkEntry,
-    WorldIndex, WorldPortalAnchor, chunk_bounds_units, chunk_key_for_world, chunk_origin_for_key,
-    dequant_local_point, dequant_rotation, dequant_u16_units, dequant_unit_vec, encode_chunk,
-    invalid_data, quant_local_aabb, quant_local_point, quant_rotation, quant_size, quant_u16_fixed,
-    quant_u16_units, quant_unit, sha256_hex, stable_level_id,
+    LevelPackage, LevelSpec, PACKAGE_SCHEMA, TriggerAnchor, WORLD_INDEX_PATH, WorldAabb,
+    WorldChunkEntry, WorldIndex, WorldPortalAnchor, chunk_bounds_units, chunk_key_for_world,
+    chunk_origin_for_key, dequant_local_point, dequant_rotation, dequant_u16_units,
+    dequant_unit_vec, encode_chunk, invalid_data, quant_local_aabb, quant_local_point,
+    quant_rotation, quant_size, quant_u16_fixed, quant_u16_units, quant_unit, sha256_hex,
+    stable_level_id,
 };
 use crate::game::enemy::{Enemy, EnemyKind};
 use crate::game::level::{
@@ -466,6 +467,21 @@ pub(super) fn compile_package(level: &LevelSpec) -> io::Result<LevelPackage> {
         index_chunks.push(entry);
     }
 
+    let mut triggers = Vec::with_capacity(level.triggers.len());
+    for (index, trigger) in level.triggers.iter().enumerate() {
+        let trigger_id = u16::try_from(index)
+            .map_err(|_| invalid_data("too many triggers for v4 u16 trigger ids"))?;
+
+        triggers.push(TriggerAnchor {
+            trigger_id,
+            source_chunk: *chunk_ids_by_key
+                .get(&chunk_key_for_world(trigger.center())?)
+                .unwrap_or(&0),
+            target_group: 0,
+            kind: trigger_runtime_kind(trigger.kind),
+        });
+    }
+
     let mut checkpoints = Vec::with_capacity(level.checkpoints.len());
     for (index, checkpoint) in level.checkpoints.iter().enumerate() {
         checkpoints.push(CheckpointAnchor {
@@ -506,6 +522,7 @@ pub(super) fn compile_package(level: &LevelSpec) -> io::Result<LevelPackage> {
             level_name: level.name.clone(),
             spawn: level.spawn,
             chunks: index_chunks,
+            triggers,
             checkpoints,
             portals,
         },
@@ -1108,5 +1125,13 @@ fn push_loaded_meta(
 
     if meta != ObjectMeta::default() {
         metadata.push(LevelObjectMeta { kind, index, meta });
+    }
+}
+
+fn trigger_runtime_kind(kind: LevelTriggerKind) -> u8 {
+    match kind {
+        LevelTriggerKind::LevelStart => 0,
+        LevelTriggerKind::LevelEnd => 1,
+        LevelTriggerKind::EnemySpawn { .. } => 2,
     }
 }

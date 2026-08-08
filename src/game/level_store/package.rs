@@ -33,7 +33,9 @@ pub use runtime::{
     SemanticRegionIndex, SimulationInterestSet, TriggerIndex, TriggerRuntimeEntry,
     UserPortalRuntime, WorldAabb, WorldPortalRuntime, WorldSpatialIndex,
 };
-pub use text_format::{CheckpointAnchor, WorldChunkEntry, WorldIndex, WorldPortalAnchor};
+pub use text_format::{
+    CheckpointAnchor, TriggerAnchor, WorldChunkEntry, WorldIndex, WorldPortalAnchor,
+};
 
 use binio::{decode_chunk, encode_chunk};
 use chunk::{compile_package, package_to_level};
@@ -179,6 +181,9 @@ impl LevelPackageReader {
             }
             chunks.push(chunk);
         }
+        if index.triggers.is_empty() {
+            index.triggers = synthesize_trigger_anchors(&chunks)?;
+        }
 
         Ok(LevelPackage {
             manifest,
@@ -186,6 +191,27 @@ impl LevelPackageReader {
             chunks,
         })
     }
+}
+
+fn synthesize_trigger_anchors(chunks: &[WorldChunk]) -> PackageResult<Vec<TriggerAnchor>> {
+    let mut anchors = Vec::new();
+
+    for chunk in chunks {
+        for kind in chunk.triggers.kind.iter().copied() {
+            let trigger_id = u16::try_from(anchors.len()).map_err(|_| {
+                LevelPackageError::InvalidData("too many triggers for v4 u16 trigger ids".into())
+            })?;
+
+            anchors.push(TriggerAnchor {
+                trigger_id,
+                source_chunk: chunk.chunk_id,
+                target_group: 0,
+                kind,
+            });
+        }
+    }
+
+    Ok(anchors)
 }
 
 impl LevelPackageWriter {

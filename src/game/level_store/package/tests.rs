@@ -161,6 +161,121 @@ fn normal_user_portal_runtime_never_requests_remote_render_or_light() {
     assert!(runtime.physics_margin > 0.0);
 }
 
+#[test]
+fn group_index_skips_zero_group_and_keeps_object_handles() {
+    let package = compile_package(&sample_level()).expect("compile v4 package");
+    let group_index = GroupIndex::from_chunks(&package.chunks);
+
+    assert!(!group_index.contains_group(0));
+
+    let solid_handles = group_index.handles(7);
+    assert_eq!(solid_handles.len(), 1);
+    assert_eq!(solid_handles[0].kind, LevelObjectKind::Solid);
+    assert_eq!(solid_handles[0].index, 0);
+
+    let portal_handles = group_index.handles(8);
+    assert_eq!(portal_handles.len(), 1);
+    assert_eq!(portal_handles[0].kind, LevelObjectKind::WorldPortal);
+}
+
+#[test]
+fn trigger_index_uses_world_index_target_groups() {
+    let mut package = compile_package(&sample_level()).expect("compile v4 package");
+    package.index.triggers[1].target_group = 11;
+
+    let trigger_index = TriggerIndex::from_package(&package).expect("build trigger index");
+    let spawn_triggers = trigger_index.for_target_group(11).collect::<Vec<_>>();
+
+    assert_eq!(spawn_triggers.len(), 1);
+    assert_eq!(spawn_triggers[0].trigger_id, 1);
+    assert_eq!(spawn_triggers[0].kind, 2);
+    assert_eq!(spawn_triggers[0].target_group, 11);
+    assert_eq!(trigger_index.for_target_group(3).count(), 0);
+    assert_eq!(trigger_index.for_target_group(0).count(), 0);
+}
+
+#[test]
+fn portal_index_tracks_world_portal_capabilities() {
+    let package = compile_package(&sample_level()).expect("compile v4 package");
+    let portal_index = PortalIndex::from_package(&package).expect("build portal index");
+
+    assert_eq!(portal_index.world_portals.len(), 2);
+
+    let seamless = portal_index.world_portal_by_id(20).expect("portal 20");
+    assert_eq!(seamless.receiver_id, 21);
+    assert!(seamless.render);
+    assert!(seamless.lighting);
+    assert!(seamless.physics);
+    assert_eq!(seamless.render_depth, 1);
+    assert_eq!(seamless.light_depth, 1);
+    assert!(seamless.physics_margin > 0.0);
+
+    let traversal_only = portal_index.world_portal_by_id(21).expect("portal 21");
+    assert!(!traversal_only.render);
+    assert!(!traversal_only.lighting);
+    assert!(traversal_only.physics);
+}
+
+#[test]
+fn portal_index_builds_user_portal_physics_halos_without_remote_render() {
+    let source = Portal::new(0.0, 0.0, Vec2::Y, 64.0, Color::BLUE);
+    let destination = Portal::new(128.0, 0.0, Vec2::Y, 96.0, Color::ORANGE);
+    let portal_index = PortalIndex::from_user_portals(&[Some(source), Some(destination)]);
+
+    assert_eq!(portal_index.world_portals.len(), 0);
+    assert_eq!(portal_index.user_portals.len(), 2);
+    assert!(portal_index.user_portals[0].source_anchor == source);
+    assert!(portal_index.user_portals[0].destination_anchor == destination);
+    assert_eq!(portal_index.user_portals[0].traversal_width, 64.0);
+    for portal in &portal_index.user_portals {
+        assert!(!portal.render_remote_scene);
+        assert!(!portal.pass_lighting);
+        assert!(portal.physics_margin > 0.0);
+    }
+}
+
+#[test]
+fn portal_index_uses_world_index_source_chunk_for_empty_spawn_chunk() {
+    let spec = LevelSpec {
+        name: "Portal Chunk Index".to_string(),
+        spawn: Vec2::ZERO,
+        solids: Vec::new(),
+        doors: Vec::new(),
+        hazards: Vec::new(),
+        checkpoints: Vec::new(),
+        enemies: Vec::new(),
+        triggers: Vec::new(),
+        texts: Vec::new(),
+        world_portals: vec![WorldPortal::new(3000.0, 0.0, Vec2::X, 96.0, 40)],
+        metadata: Vec::new(),
+        path: None,
+    };
+    let package = compile_package(&spec).expect("compile v4 package");
+    let portal_index = PortalIndex::from_package(&package).expect("build portal index");
+
+    assert_eq!(package.index.chunks.len(), 2);
+    assert_eq!(package.index.portals[0].source_chunk, 1);
+    assert_eq!(portal_index.world_portals[0].source_chunk, 1);
+}
+
+#[test]
+fn portal_index_honors_world_index_capability_flags() {
+    let mut package = compile_package(&sample_level()).expect("compile v4 package");
+    package.index.portals[0].render = false;
+    package.index.portals[0].lighting = true;
+    package.index.portals[0].physics = false;
+
+    let portal_index = PortalIndex::from_package(&package).expect("build portal index");
+    let portal = portal_index.world_portal_by_id(20).expect("portal 20");
+
+    assert!(!portal.render);
+    assert!(portal.lighting);
+    assert!(!portal.physics);
+    assert_eq!(portal.render_depth, 0);
+    assert_eq!(portal.light_depth, 1);
+    assert_eq!(portal.physics_margin, 0.0);
+}
+
 fn sample_level() -> LevelSpec {
     let mut door = Door::with_radius(320.0, 160.0, 48.0, 112.0, 144.0);
     door.speed = 4.25;

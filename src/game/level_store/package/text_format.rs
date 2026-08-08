@@ -17,6 +17,7 @@ pub struct WorldIndex {
     pub level_name: String,
     pub spawn: Vec2,
     pub chunks: Vec<WorldChunkEntry>,
+    pub triggers: Vec<TriggerAnchor>,
     pub checkpoints: Vec<CheckpointAnchor>,
     pub portals: Vec<WorldPortalAnchor>,
 }
@@ -36,6 +37,14 @@ pub struct CheckpointAnchor {
     pub index: u32,
     pub anchor: Vec2,
     pub chunk_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TriggerAnchor {
+    pub trigger_id: u16,
+    pub source_chunk: u32,
+    pub target_group: u16,
+    pub kind: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +98,15 @@ pub(super) fn format_world_index(index: &WorldIndex) -> String {
             checkpoint.index, checkpoint.anchor.x, checkpoint.anchor.y, checkpoint.chunk_id
         ));
     }
+    for trigger in &index.triggers {
+        output.push_str(&format!(
+            "trigger trigger_id={} kind={} source_chunk={} target_group={} activation_policy=once payload_offset=0\n",
+            trigger.trigger_id,
+            format_trigger_kind(trigger.kind),
+            trigger.source_chunk,
+            trigger.target_group
+        ));
+    }
     for portal in &index.portals {
         output.push_str(&format!(
             "portal id={} kind=world source_chunk={} receiver={} render={} lighting={} physics={}\n",
@@ -131,6 +149,7 @@ pub(super) fn parse_world_index(source: &str) -> io::Result<WorldIndex> {
     let mut level_name = "Level".to_string();
     let mut spawn = Vec2::ZERO;
     let mut chunks = Vec::new();
+    let mut triggers = Vec::new();
     let mut checkpoints = Vec::new();
     let mut portals = Vec::new();
 
@@ -214,6 +233,33 @@ pub(super) fn parse_world_index(source: &str) -> io::Result<WorldIndex> {
                     });
                 }
             }
+            "trigger" => {
+                let trigger_id = field_u16(&fields, "trigger_id")
+                    .or_else(|| field_u16(&fields, "id"))
+                    .ok_or_else(|| invalid_data("world.index trigger missing trigger_id"))?;
+                let source_chunk = field_u32(&fields, "source_chunk")
+                    .ok_or_else(|| invalid_data("world.index trigger missing source_chunk"))?;
+                let kind = fields
+                    .get("kind")
+                    .and_then(|value| parse_trigger_kind(value))
+                    .ok_or_else(|| invalid_data("world.index trigger missing kind"))?;
+                let target_group = fields
+                    .get("target_group")
+                    .map(|value| {
+                        value
+                            .parse::<u16>()
+                            .map_err(|_| invalid_data("world.index trigger invalid target_group"))
+                    })
+                    .transpose()?
+                    .unwrap_or(0);
+
+                triggers.push(TriggerAnchor {
+                    trigger_id,
+                    source_chunk,
+                    target_group,
+                    kind,
+                });
+            }
             "portal" => {
                 if let (Some(portal_id), Some(source_chunk), Some(receiver_id)) = (
                     field_u16(&fields, "id"),
@@ -245,6 +291,7 @@ pub(super) fn parse_world_index(source: &str) -> io::Result<WorldIndex> {
         level_name,
         spawn,
         chunks,
+        triggers,
         checkpoints,
         portals,
     })
@@ -298,14 +345,9 @@ pub(super) fn format_triggers(level: &LevelSpec) -> String {
             LevelTriggerKind::LevelEnd => "level_end",
             LevelTriggerKind::EnemySpawn { .. } => "spawn",
         };
-        let target_group = match trigger.kind {
-            LevelTriggerKind::EnemySpawn { enemy_id } => enemy_id,
-            _ => 0,
-        };
-
         output.push_str(&format!(
             "trigger trigger_id={} kind={} source_chunk={} target_group={} activation_policy=once payload_offset=0\n",
-            index, kind, 0, target_group
+            index, kind, 0, 0
         ));
     }
 
@@ -542,6 +584,24 @@ fn field_bool(fields: &HashMap<String, String>, key: &str) -> Option<bool> {
     fields
         .get(key)
         .map(|value| matches!(value.as_str(), "true" | "1" | "yes" | "on"))
+}
+
+fn parse_trigger_kind(value: &str) -> Option<u8> {
+    match value {
+        "0" | "level_start" | "checkpoint" => Some(0),
+        "1" | "level_end" => Some(1),
+        "2" | "enemy_spawn" | "spawn" => Some(2),
+        _ => value.parse::<u8>().ok(),
+    }
+}
+
+fn format_trigger_kind(kind: u8) -> String {
+    match kind {
+        0 => "checkpoint".to_string(),
+        1 => "level_end".to_string(),
+        2 => "spawn".to_string(),
+        _ => kind.to_string(),
+    }
 }
 
 fn parse_i32_pair(value: &str) -> io::Result<[i32; 2]> {

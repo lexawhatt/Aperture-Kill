@@ -1,0 +1,52 @@
+[package]
+schema = 4
+id = "author.level.custom.level.3"
+title = "CUSTOM LEVEL 3"
+author = "Author"
+created_with = "aperture-kill"
+engine_min = "0.1.0"
+entry = "world.index"
+
+[world]
+mode = "chunked"
+encoding = "typed_bitpacked_soa"
+source = "world.source.level"
+debug_dump = "world.debug.level"
+index = "world.index"
+layers = "world.layers"
+groups = "world.groups"
+triggers = "world.triggers"
+checkpoints = "world.checkpoints"
+portals = "world.portals"
+chunk_size_units = 2048
+coord_scale = 16
+coord_storage = "chunk_local_i16"
+chunk_origin_storage = "world_i32"
+
+[bits]
+object_kind_bits = 8
+portalable_bits = 1
+surface_type_bits = 2
+view_layer_bits = 3
+group_id_bits = 10
+editor_layer_bits = 10
+
+[visibility]
+model = "screen_culling"
+render_guard_units = 256
+particle_guard_units = 512
+max_target_aspect = "48:9"
+max_target_visible_chunks = 256
+occlusion_culling = "optional"
+
+[simulation]
+model = "interest_volumes"
+player_margin_units = 768
+projectile_margin_units = 1024
+portal_physics_margin_units = 512
+checkpoint_pin_radius_units = 1024
+sleep_offscreen_actors = true
+
+[compression]
+chunk_default = "none"
+preferred = "none"

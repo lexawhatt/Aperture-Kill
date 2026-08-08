@@ -1,0 +1,2 @@
+trigger trigger_id=0 kind=checkpoint source_chunk=0 target_group=0 activation_policy=once payload_offset=0
+trigger trigger_id=1 kind=level_end source_chunk=0 target_group=0 activation_policy=once payload_offset=0
