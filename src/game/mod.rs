@@ -3,7 +3,7 @@ pub mod difficulty;
 pub mod enemy;
 pub mod geometry;
 pub mod level;
-pub mod levels;
+pub mod level_store;
 pub mod player;
 pub mod portal;
 pub mod progression;
@@ -21,7 +21,8 @@ use crate::constants::{
 pub use crate::game::difficulty::Difficulty;
 use crate::game::enemy::EnemyUpdateContext;
 use crate::game::level::{CollisionGeometry, DoorEvent, Level, LevelTriggerKind, WorldPortal};
-use crate::game::levels::LevelSpec;
+use crate::game::level_store::LevelSpec;
+use crate::game::level_store::package::RuntimeChunkSets;
 use crate::game::player::{MovementInput, Player, PlayerEvent};
 use crate::game::portal::{Color, Portal};
 use crate::platform::input::{GameKey, Input};
@@ -42,6 +43,7 @@ pub struct World {
     pub level_completed: bool,
     pub damage_pulse: DamagePulse,
     pub difficulty: Difficulty,
+    pub runtime_chunks: RuntimeChunkSets,
     respawn_pos: glam::Vec2,
     sound_events: Vec<SoundEvent>,
     door_events: Vec<(usize, DoorEvent)>,
@@ -247,15 +249,27 @@ impl World {
         level_data.reset_runtime_state();
         let spawn = level_data.level_start_pos().unwrap_or(level.spawn);
 
+        let portals = [None, None];
+        let runtime_chunks = RuntimeChunkSets::from_camera_and_player(
+            &level_data,
+            spawn,
+            1.0,
+            1280.0,
+            720.0,
+            spawn,
+            &portals,
+        );
+
         Self {
             level: level_data,
             player: Player::new_with_max_health(spawn.x, spawn.y, difficulty.player_max_health()),
-            portals: [None, None],
+            portals,
             piercer: PiercerState::new(),
             death: None,
             level_completed: false,
             damage_pulse: DamagePulse::new(),
             difficulty,
+            runtime_chunks,
             respawn_pos: spawn,
             sound_events: Vec::new(),
             door_events: Vec::new(),
@@ -287,12 +301,14 @@ impl World {
         self.camera_shift = glam::Vec2::ZERO;
         self.world_portal_cooldown = 0;
         self.collision_portals.clear();
+        self.refresh_runtime_chunks(1280.0, 720.0);
     }
 
-    pub fn update(&mut self, dt: f32, input: &Input, _screen_width: f32, _screen_height: f32) {
+    pub fn update(&mut self, dt: f32, input: &Input, screen_width: f32, screen_height: f32) {
         self.sound_events.clear();
         self.damage_pulse.tick(dt);
         if self.update_death(dt, input) {
+            self.refresh_runtime_chunks(screen_width, screen_height);
             return;
         }
 
@@ -321,6 +337,8 @@ impl World {
                 step_input.consume_presses();
             }
         }
+
+        self.refresh_runtime_chunks(screen_width, screen_height);
     }
 
     pub fn drain_sound_events(&mut self) -> impl Iterator<Item = SoundEvent> + '_ {
@@ -352,6 +370,18 @@ impl World {
             };
             self.sound_events.push(sound);
         }
+    }
+
+    fn refresh_runtime_chunks(&mut self, screen_width: f32, screen_height: f32) {
+        self.runtime_chunks = RuntimeChunkSets::from_camera_and_player(
+            &self.level,
+            self.player.pos + self.camera_shift,
+            1.0,
+            screen_width.max(1.0),
+            screen_height.max(1.0),
+            self.player.pos,
+            &self.portals,
+        );
     }
 
     fn shoot_portals(&mut self, input: &Input) {

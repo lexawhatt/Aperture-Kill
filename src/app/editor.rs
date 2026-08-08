@@ -714,7 +714,7 @@ impl Editor {
 
     pub(super) fn active_layer(&self, level: &Level) -> i16 {
         self.primary_object_meta(level)
-            .map(|meta| meta.layer)
+            .map(|meta| meta.editor_layer)
             .unwrap_or(self.current_layer)
     }
 
@@ -727,12 +727,12 @@ impl Editor {
     pub(super) fn adjust_selected_object_meta(
         &mut self,
         level: &mut Level,
-        id_delta: i16,
+        group_delta: i16,
         layer_delta: i16,
     ) -> bool {
         let selected = self.valid_selected(level);
         if selected.is_empty() {
-            if id_delta == 0 && layer_delta != 0 {
+            if group_delta == 0 && layer_delta != 0 {
                 self.current_layer = self.current_layer.saturating_add(layer_delta);
                 return true;
             }
@@ -744,8 +744,8 @@ impl Editor {
             let (kind, index) = selection_object_key(selection);
             let mut meta = level.object_meta(kind, index);
 
-            meta.id = offset_u16(meta.id, id_delta);
-            meta.layer = meta.layer.saturating_add(layer_delta);
+            meta.group_id = offset_u16(meta.group_id, group_delta);
+            meta.editor_layer = meta.editor_layer.saturating_add(layer_delta);
             level.set_object_meta(kind, index, meta);
         }
         self.current_layer = self.active_layer(level);
@@ -1185,8 +1185,8 @@ impl Editor {
             kind,
             index,
             ObjectMeta {
-                id: 0,
-                layer: self.current_layer,
+                group_id: 0,
+                editor_layer: self.current_layer,
             },
         );
     }
@@ -1822,7 +1822,10 @@ mod tests {
         assert_eq!(level.solids.len(), 2);
         assert_eq!(
             level.object_meta(LevelObjectKind::Solid, 1),
-            ObjectMeta { id: 3, layer: 2 }
+            ObjectMeta {
+                group_id: 3,
+                editor_layer: 2,
+            }
         );
     }
 
@@ -1836,14 +1839,28 @@ mod tests {
             ],
             ..Level::empty()
         };
-        level.set_object_meta(LevelObjectKind::Solid, 0, ObjectMeta { id: 1, layer: 0 });
-        level.set_object_meta(LevelObjectKind::Solid, 1, ObjectMeta { id: 2, layer: 4 });
+        level.set_object_meta(
+            LevelObjectKind::Solid,
+            0,
+            ObjectMeta {
+                group_id: 1,
+                editor_layer: 0,
+            },
+        );
+        level.set_object_meta(
+            LevelObjectKind::Solid,
+            1,
+            ObjectMeta {
+                group_id: 2,
+                editor_layer: 4,
+            },
+        );
         editor.set_single_selection(EditorSelection::Solid(0));
 
         editor.delete_selected(&mut level);
 
         assert_eq!(level.solids.len(), 1);
-        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).id, 2);
-        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).layer, 4);
+        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).group_id, 2);
+        assert_eq!(level.object_meta(LevelObjectKind::Solid, 0).editor_layer, 4);
     }
 }

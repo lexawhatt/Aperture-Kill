@@ -1,4 +1,4 @@
-use crate::game::levels::LevelSpec;
+use crate::game::level_store::LevelSpec;
 
 pub const CUSTOM_LEVELS_CHAPTER_INDEX: usize = 8;
 

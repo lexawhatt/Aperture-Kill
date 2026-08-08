@@ -1315,7 +1315,7 @@ impl Canvas<'_> {
     pub(super) fn debug_overlay(&mut self, debug: DebugOverlay) {
         let panel = Rect {
             pos: Vec2::new(14.0, 196.0),
-            size: Vec2::new(260.0, 154.0),
+            size: Vec2::new(260.0, 170.0),
         };
 
         self.fill_rect(panel, Color::rgb(12, 15, 20));
@@ -1373,6 +1373,13 @@ impl Canvas<'_> {
             &format!(
                 "SOLIDS {} PORTALS {}",
                 debug.solid_count, debug.portal_count
+            ),
+        );
+        self.debug_line(
+            10,
+            &format!(
+                "CHUNKS R{} S{} RES{}",
+                debug.render_chunk_count, debug.simulation_chunk_count, debug.resident_chunk_count
             ),
         );
     }
@@ -2184,12 +2191,12 @@ impl Canvas<'_> {
     }
 
     fn editor_object_meta_rows(&mut self, pos: Vec2, width: f32, meta: EditorObjectMeta) {
-        self.editor_stepper_row(pos, width, "OBJECT ID", &meta.id.to_string());
+        self.editor_stepper_row(pos, width, "GROUP ID", &meta.group_id.to_string());
         self.editor_stepper_row(
             pos + Vec2::new(0.0, 52.0),
             width,
-            "LAYER",
-            &meta.layer.to_string(),
+            "EDITOR LAYER",
+            &meta.editor_layer.to_string(),
         );
     }
 

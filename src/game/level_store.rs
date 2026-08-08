@@ -13,6 +13,10 @@ use crate::game::level::{
 };
 use crate::game::portal::{Color, Portal};
 
+pub mod package;
+
+use self::package::{LevelPackageKind, LevelPackageReader, LevelPackageWriter};
+
 const LEVEL_DIR: &str = "levels";
 const LEVEL_FORMAT_VERSION: u8 = 3;
 
@@ -113,7 +117,7 @@ pub fn load_levels() -> Vec<LevelSpec> {
                 return None;
             }
 
-            match parse_level_file(&path) {
+            match load_level_path(&path) {
                 Ok(level) => Some(level),
                 Err(err) => {
                     eprintln!("Skipping unreadable level {}: {err}", path.display());
@@ -132,6 +136,22 @@ pub fn load_levels() -> Vec<LevelSpec> {
 }
 
 pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
+    if LevelPackageWriter::should_write_v4(level) {
+        fs::create_dir_all(LEVEL_DIR)?;
+        let path = level
+            .path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(LEVEL_DIR).join(format!("{}.lvl", slug(&level.name))));
+
+        LevelPackageWriter::write_directory(&path, level)?;
+        level.path = Some(path);
+        return Ok(());
+    }
+
+    save_legacy_level(level)
+}
+
+fn save_legacy_level(level: &mut LevelSpec) -> io::Result<()> {
     fs::create_dir_all(LEVEL_DIR)?;
     let path = level
         .path
@@ -157,8 +177,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             solid.size().y,
             solid.portalable,
             solid.rotation(),
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
     for (index, door) in level.doors.iter().enumerate() {
@@ -173,8 +193,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             door.solid.rotation(),
             door.speed,
             door.automatic,
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
     for (index, hazard) in level.hazards.iter().enumerate() {
@@ -186,8 +206,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             hazard.solid.size().x,
             hazard.solid.size().y,
             hazard.solid.rotation(),
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
     for (index, checkpoint) in level.checkpoints.iter().enumerate() {
@@ -198,8 +218,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             checkpoint.solid.pos().y,
             checkpoint.solid.size().x,
             checkpoint.solid.size().y,
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
     for (index, enemy) in level.enemies.iter().enumerate() {
@@ -215,8 +235,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             enemy.spawn_pos.y,
             enemy.spawn_id,
             enemy.spawn_wave,
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
     for (index, trigger) in level.triggers.iter().enumerate() {
@@ -244,8 +264,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             "text x={} y={} obj_id={} layer={} value={}\n",
             text.pos.x,
             text.pos.y,
-            meta.id,
-            meta.layer,
+            meta.group_id,
+            meta.editor_layer,
             quote(&text.text)
         ));
     }
@@ -269,8 +289,8 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
             portal.seamless_depth,
             portal.seamless_angle,
             portal.seamless_rely_on_walls,
-            meta.id,
-            meta.layer
+            meta.group_id,
+            meta.editor_layer
         ));
     }
 
@@ -278,6 +298,13 @@ pub fn save_level(level: &mut LevelSpec) -> io::Result<()> {
     level.path = Some(path);
 
     Ok(())
+}
+
+fn load_level_path(path: &Path) -> io::Result<LevelSpec> {
+    match LevelPackageReader::detect(path)? {
+        LevelPackageKind::LegacyV3 => parse_level_file(path),
+        LevelPackageKind::PackageV4 => LevelPackageReader::read(path),
+    }
 }
 
 fn parse_level_file(path: &Path) -> io::Result<LevelSpec> {
@@ -542,8 +569,8 @@ fn format_trigger(kind: &str, solid: Solid, enemy_id: Option<u16>, meta: ObjectM
         solid.size().x,
         solid.size().y,
         enemy_id,
-        meta.id,
-        meta.layer
+        meta.group_id,
+        meta.editor_layer
     )
 }
 
@@ -722,12 +749,18 @@ fn push_inline_meta(
 }
 
 fn field_meta(fields: &HashMap<String, String>) -> Option<ObjectMeta> {
-    let id = field_u16(fields, "obj_id")
+    let group_id = field_u16(fields, "group_id")
+        .or_else(|| field_u16(fields, "obj_id"))
         .or_else(|| field_u16(fields, "object_id"))
         .unwrap_or(0);
-    let layer = field_i16(fields, "layer").unwrap_or(0);
+    let editor_layer = field_i16(fields, "editor_layer")
+        .or_else(|| field_i16(fields, "layer"))
+        .unwrap_or(0);
 
-    (id != 0 || layer != 0).then_some(ObjectMeta { id, layer })
+    (group_id != 0 || editor_layer != 0).then_some(ObjectMeta {
+        group_id,
+        editor_layer,
+    })
 }
 
 fn keyed_rect(fields: &HashMap<String, String>) -> Option<(Vec2, Vec2)> {
@@ -842,12 +875,18 @@ mod tests {
                 LevelObjectMeta {
                     kind: LevelObjectKind::Solid,
                     index: 0,
-                    meta: ObjectMeta { id: 7, layer: -2 },
+                    meta: ObjectMeta {
+                        group_id: 7,
+                        editor_layer: -2,
+                    },
                 },
                 LevelObjectMeta {
                     kind: LevelObjectKind::Text,
                     index: 0,
-                    meta: ObjectMeta { id: 12, layer: 3 },
+                    meta: ObjectMeta {
+                        group_id: 12,
+                        editor_layer: 3,
+                    },
                 },
             ],
             path: Some(path.clone()),
@@ -863,12 +902,18 @@ mod tests {
         assert!(parsed.metadata.contains(&LevelObjectMeta {
             kind: LevelObjectKind::Solid,
             index: 0,
-            meta: ObjectMeta { id: 7, layer: -2 },
+            meta: ObjectMeta {
+                group_id: 7,
+                editor_layer: -2,
+            },
         }));
         assert!(parsed.metadata.contains(&LevelObjectMeta {
             kind: LevelObjectKind::Text,
             index: 0,
-            meta: ObjectMeta { id: 12, layer: 3 },
+            meta: ObjectMeta {
+                group_id: 12,
+                editor_layer: 3,
+            },
         }));
     }
 
@@ -936,6 +981,24 @@ mod tests {
         let _ = fs::remove_file(path);
 
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn v3_level_still_loads_through_package_detection() {
+        let path = unique_test_path("v3_detection");
+        fs::write(
+            &path,
+            "portals_level version=3\nlevel name=\"Detected\" spawn_x=12 spawn_y=34\nsolid x=0 y=0 w=16 h=16 portalable=true rotation=0 obj_id=2 layer=1\n",
+        )
+        .expect("write v3 level");
+
+        let parsed = load_level_path(&path).expect("load detected v3 level");
+        let _ = fs::remove_file(path);
+
+        assert_eq!(parsed.name, "Detected");
+        assert_eq!(parsed.spawn, Vec2::new(12.0, 34.0));
+        assert_eq!(parsed.solids.len(), 1);
+        assert!(parsed.solids[0].portalable);
     }
 
     fn unique_test_path(name: &str) -> PathBuf {

@@ -15,8 +15,8 @@ const DEFAULT_DOOR_SPEED: f32 = 3.6;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectMeta {
-    pub id: u16,
-    pub layer: i16,
+    pub group_id: u16,
+    pub editor_layer: i16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

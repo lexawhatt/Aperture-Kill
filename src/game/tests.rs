@@ -1239,7 +1239,7 @@ fn respawn_resets_spawn_triggers_and_hides_wave_enemies() {
 #[test]
 fn difficulty_sets_player_max_health() {
     let world = World::from_level_with_difficulty(
-        &crate::game::levels::LevelSpec::fallback(),
+        &crate::game::level_store::LevelSpec::fallback(),
         Difficulty::Harmless,
     );
 

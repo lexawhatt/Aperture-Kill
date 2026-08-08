@@ -15,7 +15,7 @@ use crate::settings::{OptionsTab, Settings, VolumeKind};
 use audio::Audio;
 use camera::Camera;
 use editor::Editor;
-use game::levels::{LevelSpec, load_levels, save_level};
+use game::level_store::{LevelSpec, load_levels, save_level};
 use game::{Difficulty, World};
 use glam::Vec2;
 use platform::input::Input;

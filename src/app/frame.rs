@@ -247,8 +247,8 @@ impl App {
                 .editor
                 .primary_object_meta(&self.world.level)
                 .map(|meta| EditorObjectMeta {
-                    id: meta.id,
-                    layer: meta.layer,
+                    group_id: meta.group_id,
+                    editor_layer: meta.editor_layer,
                 }),
             inspector,
             inspector_open: self.editor_inspector_open,
@@ -319,6 +319,9 @@ impl App {
             slamming: self.world.player.is_ground_slamming(),
             solid_count: self.world.level.solids.len(),
             portal_count: self.world.portals.iter().flatten().count(),
+            render_chunk_count: self.world.runtime_chunks.render_visible.chunks.len(),
+            simulation_chunk_count: self.world.runtime_chunks.simulation_interest.chunks.len(),
+            resident_chunk_count: self.world.runtime_chunks.resident.chunks.len(),
         })
     }
 

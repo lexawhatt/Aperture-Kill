@@ -12,6 +12,7 @@ use glam::Vec2;
 
 use crate::game::World;
 use crate::game::level::{LevelTriggerKind, WorldPortal};
+use crate::game::level_store::package::{DEFAULT_RENDER_GUARD_UNITS, RenderVisibleSet, WorldAabb};
 use crate::game::player::Player;
 use crate::game::portal::{Color, Portal};
 use crate::platform::input::GameKey;
@@ -111,8 +112,8 @@ pub struct EditorOverlay {
 
 #[derive(Clone, Copy)]
 pub struct EditorObjectMeta {
-    pub id: u16,
-    pub layer: i16,
+    pub group_id: u16,
+    pub editor_layer: i16,
 }
 
 #[derive(Clone, Copy)]
@@ -168,6 +169,9 @@ pub struct DebugOverlay {
     pub slamming: bool,
     pub solid_count: usize,
     pub portal_count: usize,
+    pub render_chunk_count: usize,
+    pub simulation_chunk_count: usize,
+    pub resident_chunk_count: usize,
 }
 
 impl Renderer {
@@ -188,9 +192,23 @@ impl Renderer {
         } = scene;
         let mut canvas = Canvas::new(frame, width, height, camera, zoom);
         let editor_mode = matches!(&mode, RenderMode::Editor(_));
+        let visible = RenderVisibleSet::from_camera(
+            &world.level,
+            camera,
+            zoom,
+            width as f32,
+            height as f32,
+            DEFAULT_RENDER_GUARD_UNITS,
+        );
 
         canvas.clear(Color::rgb(9, 10, 14));
-        self.draw_world(&mut canvas, world, editor_mode, &plan.world_portals);
+        self.draw_world(
+            &mut canvas,
+            world,
+            editor_mode,
+            &plan.world_portals,
+            &visible,
+        );
         canvas.hud(
             world.player.health,
             world.player.health_percent(),
@@ -243,11 +261,15 @@ impl Renderer {
         world: &World,
         editor_mode: bool,
         portal_plan: &WorldPortalRenderPlan,
+        visible: &RenderVisibleSet,
     ) {
         canvas.seamless_portal_views(world, portal_plan);
 
         // Static geometry is drawn first so portals and actors stay readable.
         for (solid_index, solid) in world.level.solids.iter().enumerate() {
+            if !visible.contains_solid(*solid) {
+                continue;
+            }
             let fill = if solid.portalable {
                 Color::rgb(36, 42, 53)
             } else {
@@ -262,19 +284,31 @@ impl Renderer {
         }
 
         for door in &world.level.doors {
+            if !visible.contains_solid(door.solid) && !visible.contains_solid(door.moving_solid()) {
+                continue;
+            }
             canvas.door(*door);
         }
 
         for hazard in &world.level.hazards {
+            if !visible.contains_solid(hazard.solid) {
+                continue;
+            }
             canvas.hazard(*hazard);
         }
 
         for checkpoint in &world.level.checkpoints {
+            if !visible.contains_solid(checkpoint.solid) {
+                continue;
+            }
             canvas.checkpoint(*checkpoint);
         }
 
         if editor_mode {
             for trigger in &world.level.triggers {
+                if !visible.contains_solid(trigger.solid) {
+                    continue;
+                }
                 let color = trigger_world_color(trigger.kind);
 
                 canvas.solid_outline(trigger.solid, color);
@@ -288,11 +322,17 @@ impl Renderer {
         }
 
         for text in &world.level.texts {
+            if !visible.contains_point(text.pos) {
+                continue;
+            }
             canvas.world_text(text.pos, &text.text, 2, Color::rgb(210, 218, 230));
         }
 
         for portal in &world.level.world_portals {
             if portal.seamless && !editor_mode {
+                continue;
+            }
+            if !visible.contains_solid(portal.edit_solid()) {
                 continue;
             }
 
@@ -313,6 +353,12 @@ impl Renderer {
 
         // Portals are visual-only here; physics is owned by World.
         for portal in world.portals.iter().flatten() {
+            if !visible.world_rect.overlaps(WorldAabb::from_center_size(
+                portal.pos,
+                Vec2::splat(portal.active_width() + 64.0),
+            )) {
+                continue;
+            }
             let (a, b) = portal.endpoints();
             canvas.draw_world_line(a, b, portal.color);
             canvas.draw_world_line(
@@ -328,6 +374,14 @@ impl Renderer {
             .iter()
             .filter(|enemy| editor_mode || enemy.is_active())
         {
+            let solid = if editor_mode {
+                enemy.spawn_solid()
+            } else {
+                enemy.solid()
+            };
+            if !visible.contains_solid(solid) {
+                continue;
+            }
             if editor_mode {
                 canvas.enemy_spawn_preview(enemy);
             } else {
